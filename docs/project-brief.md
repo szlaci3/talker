@@ -1,6 +1,6 @@
 # Portfolio chat: project brief
 
-Updated: 2026-09-25. Status: Talker milestone 1 is implemented locally with a mock provider; frontend production build and live Google chat remain unverified. No deployment has been performed. Recommendations below are proposed defaults, not additional user commitments. Current checks and next steps live in [implementation-status.md](implementation-status.md); execution details live in [implementation-handover.md](implementation-handover.md).
+Updated: 2026-09-25. Status: Talker milestone 1 builds locally; user reports one successful Antigravity chat turn and corresponding Agents-category usage. Multi-turn and cancellation acceptance checks remain pending; Gemini fallback and deployment are unverified. Recommendations below are proposed defaults, not additional user commitments. Current checks and next steps live in [implementation-status.md](implementation-status.md); execution details live in [implementation-handover.md](implementation-handover.md).
 
 ## User requirements
 
