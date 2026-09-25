@@ -1,6 +1,6 @@
 # Portfolio chat: project brief
 
-Updated: 2026-09-25. Status: milestone 1 implementation started; no deployment or live provider verification. Recommendations below are proposed defaults, not additional user commitments. No runtime or account access has been tested. Execution details live in [implementation-handover.md](implementation-handover.md), with current results in [implementation-status.md](implementation-status.md).
+Updated: 2026-09-25. Status: Talker milestone 1 is implemented locally with a mock provider; frontend production build and live Google chat remain unverified. No deployment has been performed. Recommendations below are proposed defaults, not additional user commitments. Current checks and next steps live in [implementation-status.md](implementation-status.md); execution details live in [implementation-handover.md](implementation-handover.md).
 
 ## User requirements
 

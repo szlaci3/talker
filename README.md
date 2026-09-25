@@ -1,4 +1,4 @@
-# Bolivia chat MVP
+# Talker chat MVP
 
 Typed, single-thread chat proof of concept. Start locally with the explicit `mock` provider first; its replies are labeled and do not verify Google access. The live provider keeps its key in the backend only.
 

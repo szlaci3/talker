@@ -6,7 +6,7 @@ Prepared 2026-09-25. Read [project-brief.md](project-brief.md) for product requi
 
 The user intends GPT-6-astra/high for planning and later review, and GPT-6-luna/medium for implementation and bug fixes in a new task. Work in small, completed milestones with explicit checks; avoid requiring the executor to reconstruct architectural decisions. Start implementation only when requested. Do not create the new task or deploy now.
 
-Workspace: `C:\Users\szala\Combine\Bolivia`. Reference project, read-only for this work: `C:\Users\szala\Planets\Reciter`. AGENTS.md contains the user's Browser Use limitation; do not promise interactive browser verification using an unavailable tool.
+Workspace: `C:\Users\szala\Combine\Talker`. Reference project, read-only for this work: `C:\Users\szala\Planets\Reciter`. AGENTS.md contains the user's Browser Use limitation; do not promise interactive browser verification using an unavailable tool.
 
 Recommended stack: React/TypeScript/Vite frontend on Netlify; Python/aiohttp backend on Render for Google and edge-tts. A single conversation, general assistant, desktop only. No account system, conversation sidebar, attachments, database-backed chat history, mobile work, or managed-agent sandbox in the initial scope. Do not import Reciter's document library or learning features.
 
@@ -88,4 +88,4 @@ When coding begins, maintain `docs/implementation-status.md` with only: current 
 
 Starter message for the new implementation task:
 
-> Implement the typed-chat MVP in C:\Users\szala\Combine\Bolivia. Read AGENTS.md, docs/project-brief.md, and docs/implementation-handover.md first, plus docs/implementation-status.md if it exists. Use the documented React/TypeScript frontend and Python/aiohttp backend direction, with Netlify/Render deployment configuration. Reciter at C:\Users\szala\Planets\Reciter is a read-only reference. Complete milestone 1 and its available checks, recording missing credentials or live verification honestly. Preserve the later WebMCP and hands-free voice requirements in the architecture without implementing those later milestones yet. Update the implementation status and report the result. Do not deploy publicly in this task.
+> Implement the typed-chat MVP in C:\Users\szala\Combine\Talker. Read AGENTS.md, docs/project-brief.md, and docs/implementation-handover.md first, plus docs/implementation-status.md if it exists. Use the documented React/TypeScript frontend and Python/aiohttp backend direction, with Netlify/Render deployment configuration. Reciter at C:\Users\szala\Planets\Reciter is a read-only reference. Complete milestone 1 and its available checks, recording missing credentials or live verification honestly. Preserve the later WebMCP and hands-free voice requirements in the architecture without implementing those later milestones yet. Update the implementation status and report the result. Do not deploy publicly in this task.
