@@ -1,6 +1,6 @@
 # Talker chat MVP
 
-Typed, single-thread chat proof of concept. Start locally with the explicit `mock` provider first; its replies are labeled and do not verify Google access. The live provider keeps its key in the backend only.
+Typed, single-thread chat proof of concept. Chat history is in-memory and clears on page reload; the backend scopes Antigravity context to the current page conversation. Start locally with the explicit `mock` provider first; its replies are labeled and do not verify Google access. The live provider keeps its key in the backend only.
 
 ## Local setup
 

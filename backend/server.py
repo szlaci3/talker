@@ -9,6 +9,7 @@ import time
 from collections import defaultdict, deque
 from datetime import datetime, timezone
 from pathlib import Path
+import uuid
 
 from aiohttp import ClientSession, ClientTimeout, web
 from dotenv import load_dotenv
@@ -54,7 +55,7 @@ def cors_headers(request):
     allowed = {x.strip() for x in os.getenv("ALLOWED_ORIGINS", "http://localhost:5173").split(",")}
     if origin and origin not in allowed:
         raise web.HTTPForbidden(text='{"error":"Origin is not allowed."}', content_type="application/json")
-    return {"Access-Control-Allow-Origin": origin or next(iter(allowed)), "Vary": "Origin", "Access-Control-Allow-Headers": "Authorization,Content-Type", "Access-Control-Allow-Methods": "GET,POST,OPTIONS"}
+    return {"Access-Control-Allow-Origin": origin or next(iter(allowed)), "Vary": "Origin", "Access-Control-Allow-Headers": "Authorization,Content-Type,X-Conversation-ID", "Access-Control-Allow-Methods": "GET,POST,OPTIONS"}
 
 
 @web.middleware
@@ -135,6 +136,11 @@ async def chat_route(request):
     if not valid_token(bearer):
         raise web.HTTPUnauthorized(text='{"error":"Your session expired. Enter the code again."}', content_type="application/json")
     session_key = hashlib.sha256(bearer.encode()).hexdigest()
+    raw_conversation_id = request.headers.get("X-Conversation-ID", "")
+    try:
+        conversation_id = str(uuid.UUID(raw_conversation_id))
+    except (ValueError, AttributeError):
+        raise web.HTTPBadRequest(text='{"error":"A valid conversation ID is required."}', content_type="application/json")
     rate_check(usage, session_key, 30, 3600)
     utc_day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     now = time.time()
@@ -151,17 +157,19 @@ async def chat_route(request):
     await response.prepare(request)
     try:
         if provider == "mock":
-            answer = "MOCK REPLY (local only): " + messages[-1]["parts"][0]["text"]
-            for start in range(0, len(answer), 12):
-                await write_event(response, {"delta": answer[start:start + 12]})
-                await asyncio.sleep(0.025)
+            async with antigravity_locks[session_key]:
+                antigravity_sessions.pop(session_key, None)
+                answer = "MOCK REPLY (local only): " + messages[-1]["parts"][0]["text"]
+                for start in range(0, len(answer), 12):
+                    await write_event(response, {"delta": answer[start:start + 12]})
+                    await asyncio.sleep(0.025)
         elif provider in ("google", "gemini"):
             async with antigravity_locks[session_key]:
                 antigravity_sessions.pop(session_key, None)
                 await stream_gemini(response, messages)
         elif provider == "antigravity":
             async with antigravity_locks[session_key]:
-                await stream_antigravity(response, session_key, messages)
+                await stream_antigravity(response, session_key, conversation_id, messages)
         else:
             await write_event(response, {"error": "CHAT_PROVIDER must be mock, antigravity, or gemini."})
     except (asyncio.CancelledError, ConnectionResetError):
@@ -205,11 +213,12 @@ async def stream_gemini(response, messages):
                     continue
 
 
-async def stream_antigravity(response, session_key, messages):
+async def stream_antigravity(response, session_key, conversation_id, messages):
     api_key = secret("GOOGLE_API_KEY", 12)
     agent = os.getenv("ANTIGRAVITY_AGENT", "antigravity-preview-09-2026")
     state = antigravity_sessions.get(session_key)
-    if not state or state.get("provider") != "antigravity":
+    if not state or state.get("provider") != "antigravity" or state.get("conversation_id") != conversation_id:
+        state = None
         prompt = "\n".join(("Assistant" if m["role"] == "model" else "User") + ": " + m["parts"][0]["text"] for m in messages)
         environment = "remote"
         previous_id = None
@@ -266,7 +275,7 @@ async def stream_antigravity(response, session_key, messages):
                 elif event_type == "interaction.completed":
                     completed = interaction.get("status", "completed") == "completed"
                     if completed:
-                        antigravity_sessions[session_key] = {"provider": "antigravity", "interaction_id": interaction_id, "environment_id": environment_id}
+                        antigravity_sessions[session_key] = {"provider": "antigravity", "conversation_id": conversation_id, "interaction_id": interaction_id, "environment_id": environment_id}
                     else:
                         await write_event(response, {"error": "Antigravity did not complete this response."})
                 elif event_type in ("interaction.failed", "error"):
@@ -279,7 +288,7 @@ async def stream_antigravity(response, session_key, messages):
                     full_interaction = await detail.json()
                     environment_id = full_interaction.get("environment_id")
     if completed and interaction_id and environment_id:
-        antigravity_sessions[session_key] = {"provider": "antigravity", "interaction_id": interaction_id, "environment_id": environment_id}
+        antigravity_sessions[session_key] = {"provider": "antigravity", "conversation_id": conversation_id, "interaction_id": interaction_id, "environment_id": environment_id}
     elif completed:
         antigravity_sessions.pop(session_key, None)
         await write_event(response, {"error": "Antigravity did not return conversation state; please start a new chat session."})
