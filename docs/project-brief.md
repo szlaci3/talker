@@ -5,7 +5,7 @@ Updated: 2026-09-25. Status: Talker milestone 1 is implemented locally with a mo
 ## User requirements
 
 - Developer-portfolio proof of concept showcasing WebMCP.
-- Target standard desktop browsers; phones are out of scope. When WebMCP is unavailable, display a notice and continue with the best available fallbacks. Native WebMCP is not required in every browser; exact desktop browser/OS coverage remains to be defined.
+- Target standard desktop browsers; phones are out of scope. When WebMCP is unavailable, display a notice and continue with the best available fallbacks. Native WebMCP is not required in every browser; desktop browser/OS coverage is partial and not fully verified; this limitation is accepted.
 - Initially one chat screen, visually familiar to ChatGPT, one conversation, no sidebars. Typed messages and answers form the first MVP.
 - General-purpose assistant with suggested prompts demonstrating conversational UI changes (user accepted this recommendation).
 - Users can request changes to the interface they are using, e.g. larger fonts, dark mode, or light mode.
@@ -72,7 +72,7 @@ Verify each milestone against its behavior before expanding scope. Do not claim 
 
 ## Open decisions
 
-- Exact desktop browser/OS coverage; phones are excluded and WebMCP fallback with a notice is accepted.
+- Desktop browser/OS coverage is partial, not fully verified, and accepted; phones are excluded and WebMCP fallback with a notice is accepted.
 - Brian's exact service identifier and synthesis availability; acceptable alternate browser voice when Daniel is absent.
 - Voice languages; transcript persistence; silence timing and treatment of late transcript corrections after a turn is sent. Immediate interruption on user speech is confirmed.
 - Direct Gemini versus managed Antigravity, actual account quotas, and exact entry-code mechanism.
