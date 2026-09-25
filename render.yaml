@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: bolivia-chat-api
+    runtime: python
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: python server.py
+    healthCheckPath: /healthz
+    envVars:
+      - key: INVITATION_CODE
+        sync: false
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: GOOGLE_API_KEY
+        sync: false
+      - key: GOOGLE_MODEL
+        value: gemini-3.8-flash
+      - key: ALLOWED_ORIGINS
+        sync: false
+      - key: MAX_DAILY_REQUESTS
+        value: "250"
