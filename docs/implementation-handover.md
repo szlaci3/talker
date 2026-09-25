@@ -8,7 +8,7 @@ The user intends GPT-6-astra/high for planning and later review, and GPT-6-luna/
 
 Workspace: `C:\Users\szala\Combine\Talker`. Reference project, read-only for this work: `C:\Users\szala\Planets\Reciter`. AGENTS.md contains the user's Browser Use limitation; do not promise interactive browser verification using an unavailable tool.
 
-Recommended stack: React/TypeScript/Vite frontend on Netlify; Python/aiohttp backend on Render for Google and edge-tts. A single conversation, general assistant, desktop only. No account system, conversation sidebar, attachments, database-backed chat history, mobile work, or managed-agent sandbox in the initial scope. Do not import Reciter's document library or learning features.
+Recommended stack: React/TypeScript/Vite frontend on Netlify; Python/aiohttp backend on Render for Antigravity/Gemini and edge-tts. Antigravity uses its managed remote environment; disable agent tools for this chat-only app. A single conversation, general assistant, desktop only. No account system, conversation sidebar, attachments, database-backed chat history, or mobile work. Do not import Reciter's document library or learning features.
 
 ## Starting defaults and unresolved dependencies
 
@@ -19,7 +19,7 @@ Use these as provisional defaults when implementation is authorized; record devi
 | Browser validation | Desktop Edge and Chrome first; feature-detect everywhere | Broader desktop OS/browser coverage is not promised |
 | Chat history | In-memory, one session; reload clears conversation | User has not requested persistence |
 | UI settings | System theme initially; theme and font scale may persist locally | Reset always available |
-| Google | Direct Gemini behind a provider adapter | User originally preferred Antigravity; validate project access and confirm any material change before locking provider choice |
+| Model provider | Antigravity managed agent first; direct Gemini fallback | User reports higher daily and per-minute token quotas on their Antigravity API access. Validate live quota and access. Keep provider selectable with `CHAT_PROVIDER`; do not set the agent ID as `GOOGLE_MODEL` |
 | Speech | edge-tts with the exact requested Brian voice; browser Daniel during warmup | Enumerate live voices and synthesize a generic sample; verify identifier, never guess it |
 | Input language | English initially, configurable | Additional languages undecided; Brian being multilingual does not establish input recognition support |
 | Entry gate | Configured random invitation code, validated server-side | User's original daily-number/date idea remains an alternative; settle before public release |
@@ -32,7 +32,7 @@ No secrets belong in documentation, prompts, tests, logs, or frontend configurat
 Keep modules small without creating a generic framework:
 
 - `frontend/`: chat UI, API client, typed UI actions, WebMCP adapter, and voice controller. Keep transcript handling separate from audio playback.
-- `backend/`: aiohttp routes, Google adapter, edge-tts adapter, session/gate validation, and usage enforcement.
+- `backend/`: aiohttp routes, Antigravity and Gemini adapters, edge-tts adapter, session/gate validation, and usage enforcement.
 - `docs/`: brief, this plan, and a short implementation status file created when coding starts.
 
 Suggested routes: public `GET /healthz`; `POST /api/session` for the entry code; authenticated `POST /api/chat`, `GET /api/voices`, and `POST /api/speech`. Keep text/audio limits explicit. Use direct HTTPS API calls with an exact origin allowlist and a short-lived bearer session kept in memory as a simple starting point; if choosing cookies/proxying instead, verify browser and streaming behavior. The visitor session is not the Google key or a copy of Reciter's permanent cloud key. Enforce access and usage limits server-side; CORS alone provides neither.

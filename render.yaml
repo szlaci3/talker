@@ -15,6 +15,10 @@ services:
         sync: false
       - key: GOOGLE_MODEL
         value: gemini-3.8-flash
+      - key: CHAT_PROVIDER
+        value: antigravity
+      - key: ANTIGRAVITY_AGENT
+        value: antigravity-preview-09-2026
       - key: ALLOWED_ORIGINS
         sync: false
       - key: MAX_DAILY_REQUESTS

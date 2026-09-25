@@ -6,7 +6,7 @@ Typed, single-thread chat proof of concept. Start locally with the explicit `moc
 
 1. In `frontend/`, run `npm install`, then `npm run dev`.
 2. In `backend/`, create and activate a virtual environment, install `requirements.txt`, and copy `.env.example` to `.env`. The server loads that file on startup for local development.
-3. In `backend/.env`, set `INVITATION_CODE` to at least 12 characters and `SESSION_SECRET` to a random value of at least 32 characters. Keep `CHAT_PROVIDER=mock` for local UI work. To use Google, set `CHAT_PROVIDER=google`, add a Google API key, and confirm the model name and quota in the intended Google project. Restart the API after editing `.env`.
+3. In `backend/.env`, set `INVITATION_CODE` to at least 12 characters and `SESSION_SECRET` to a random value of at least 32 characters. Keep `CHAT_PROVIDER=mock` for local UI work. To try your preferred managed agent, set `CHAT_PROVIDER=antigravity` (this is the provider switch, not `GOOGLE_MODEL`), add your API key as `GOOGLE_API_KEY`, and leave `ANTIGRAVITY_AGENT=antigravity-preview-09-2026`. To try the direct Gemini fallback, set `CHAT_PROVIDER=gemini` and confirm the `GOOGLE_MODEL` name and quota in your Google project. Restart the API after editing `.env`.
 4. Run the API with `python server.py`; open the Vite URL and enter the invitation code.
 
 For a deployed backend, configure these values in the hosting provider environment settings; a local `.env` file is not deployed.
