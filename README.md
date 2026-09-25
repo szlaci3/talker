@@ -5,9 +5,11 @@ Typed, single-thread chat proof of concept. Start locally with the explicit `moc
 ## Local setup
 
 1. In `frontend/`, run `npm install`, then `npm run dev`.
-2. In `backend/`, create a virtual environment, install `requirements.txt`, and copy `.env.example` to `.env`.
-3. Set `INVITATION_CODE` to at least 12 characters and `SESSION_SECRET` to a random value of at least 32 characters. Keep `CHAT_PROVIDER=mock` for local UI work. To use Google, set `CHAT_PROVIDER=google`, add a Google API key, and confirm the model name and quota in the intended Google project.
+2. In `backend/`, create and activate a virtual environment, install `requirements.txt`, and copy `.env.example` to `.env`. The server loads that file on startup for local development.
+3. In `backend/.env`, set `INVITATION_CODE` to at least 12 characters and `SESSION_SECRET` to a random value of at least 32 characters. Keep `CHAT_PROVIDER=mock` for local UI work. To use Google, set `CHAT_PROVIDER=google`, add a Google API key, and confirm the model name and quota in the intended Google project. Restart the API after editing `.env`.
 4. Run the API with `python server.py`; open the Vite URL and enter the invitation code.
+
+For a deployed backend, configure these values in the hosting provider environment settings; a local `.env` file is not deployed.
 
 Set `VITE_API_URL` before building the frontend when the API is hosted somewhere other than `http://localhost:8080`. Configure the API's `ALLOWED_ORIGINS` to the exact frontend origin(s).
 

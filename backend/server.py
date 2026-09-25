@@ -8,8 +8,13 @@ import os
 import time
 from collections import defaultdict, deque
 from datetime import datetime, timezone
+from pathlib import Path
 
 from aiohttp import ClientSession, ClientTimeout, web
+from dotenv import load_dotenv
+
+# Local development config is optional; deployed services use injected environment variables.
+load_dotenv(Path(__file__).with_name(".env"))
 
 MAX_BODY = 48_000
 MAX_MESSAGES = 24
