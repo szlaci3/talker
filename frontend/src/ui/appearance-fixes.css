@@ -1,3 +1,16 @@
+.toolbar select,
+.color-panel select {
+  color-scheme: light;
+  color: #292925;
+  background: #fff;
+}
+
+.toolbar select option,
+.color-panel select option {
+  color: #292925;
+  background: #fff;
+}
+
 :root[data-theme=dark] .composer {
   background: var(--ui-composer-bg);
 }

@@ -73,8 +73,8 @@ Verify each milestone against its behavior before expanding scope. Do not claim 
 ## Open decisions
 
 - Desktop browser/OS coverage is partial, not fully verified, and accepted; phones are excluded and WebMCP fallback with a notice is accepted.
-- Brian playback, browser fallback, and word-preserving handoff are user-verified in desktop Edge/Chrome and incidentally Edge on iPhone; English and Hungarian output work well. Handoff and new-text preparation have a reported 5–14 second silence, and cold-start recovery requires Reconnect. Daniel's specific availability remains unconfirmed.
+- Brian playback, browser fallback, and word-preserving handoff are user-verified in desktop Edge/Chrome and incidentally Edge on iPhone; English and Hungarian output work well. Following the reported 5–14 second preparation silence, the corrected policy uses Brian from the start when ready and prepares a later Brian segment during browser fallback; the user reports the corrected playback tests passed. Cold-start recovery previously required Reconnect. Daniel's specific availability remains unconfirmed.
 - Voice languages; transcript persistence; silence timing and treatment of late transcript corrections after a turn is sent. Immediate interruption on user speech is confirmed.
 - Exact entry-code mechanism.
 
-Next step: address speech startup/handoff latency and cold-start recovery; see [implementation-status.md](implementation-status.md). No end-to-end invocation through the browser WebMCP API has been recorded; chat-driven appearance changes are verified through the direct shared-handler path.
+Next step: close remaining speech-output checks before hands-free input; see [implementation-status.md](implementation-status.md). No end-to-end invocation through the browser WebMCP API has been recorded; chat-driven appearance changes are verified through the direct shared-handler path.
