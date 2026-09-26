@@ -5,6 +5,30 @@ import { preferredVoice, PREFERRED_VOICE, SpeechOutput, speechSegments, speechTe
 const brian = { name: PREFERRED_VOICE, locale: 'en-US', friendlyName: 'Microsoft BrianMultilingual Online (Natural) - English (United States)' };
 
 describe('speech output', () => {
+  it('keeps the browser fetch receiver for catalogue and synthesis requests', async () => {
+    const receivers: unknown[] = [];
+    const urls: string[] = [];
+    vi.stubGlobal('fetch', async function (this: unknown, input: RequestInfo | URL) {
+      receivers.push(this);
+      urls.push(String(input));
+      return String(input).endsWith('/api/voices')
+        ? new Response(JSON.stringify({ voices: [brian] }), { status: 200 })
+        : new Response(new Blob(['mp3']), { status: 200 });
+    });
+    const audio = { src: '', play: vi.fn(async () => {}), pause: vi.fn(), removeAttribute: vi.fn(), load: vi.fn() } as unknown as HTMLAudioElement;
+    const output = new SpeechOutput('https://api.test', () => 'session-token', vi.fn(), { synth: null, makeAudio: () => audio });
+    try {
+      await output.reconnect();
+      expect(urls).toEqual(['https://api.test/api/voices', 'https://api.test/api/speech']);
+      expect(receivers).toHaveLength(2);
+      for (const receiver of receivers) expect(receiver).toBe(globalThis);
+      expect(output.snapshot().service).toBe('ready');
+    } finally {
+      output.dispose();
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('speaks readable Markdown text and preserves every segment boundary', () => {
     const source = '# History\n\nThe **war** began.\n\n- First consequence\n- [More details](https://example.test)';
     expect(speechText(source)).toBe('History The war began. First consequence More details');

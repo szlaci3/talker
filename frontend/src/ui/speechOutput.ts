@@ -82,7 +82,7 @@ export class SpeechOutput {
     private onChange: (state: SpeechSnapshot) => void,
     dependencies: Dependencies = {},
   ) {
-    this.fetcher = dependencies.fetcher || fetch;
+    this.fetcher = dependencies.fetcher || globalThis.fetch.bind(globalThis);
     this.synth = dependencies.synth === undefined ? window.speechSynthesis || null : dependencies.synth;
     this.makeUtterance = dependencies.makeUtterance || (text => new SpeechSynthesisUtterance(text));
     this.makeAudio = dependencies.makeAudio || (() => new Audio());
