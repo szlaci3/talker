@@ -75,6 +75,7 @@ export class SpeechOutput {
   private objectUrl: string | null = null;
   private prepared: { index: number; result: Promise<RequestResult> } | null = null;
   private engine: 'edge' | 'browser' | null = null;
+  private readonly browserLeadSegments = 3;
 
   constructor(
     private api: string,
@@ -137,6 +138,7 @@ export class SpeechOutput {
           if (Array.isArray(result.voices) && preferredVoice(result.voices)) {
             this.voiceReady = true;
             this.update({ service: 'ready', detail: 'Brian voice is ready.' });
+            this.prepareHandoff(this.generation);
             return;
           }
           this.update({ service: 'unavailable', detail: 'Brian is not available from the speech service. Browser speech remains available.' });
@@ -211,6 +213,15 @@ export class SpeechOutput {
       this.update({ phase: 'ended', detail: 'Finished.' });
       this.engine = null;
       return;
+    }
+    if (this.part < this.browserLeadSegments) {
+      this.playBrowserPart(generation);
+      return;
+    }
+    if (!this.voiceReady && this.state.service === 'connecting' && this.voiceStatusPromise) {
+      this.update({ phase: 'loading', detail: 'Preparing Brian audio…' });
+      await this.voiceStatusPromise;
+      if (generation !== this.generation || this.paused) return;
     }
     if (this.voiceReady && !this.edgeFailed) {
       this.engine = 'edge';
@@ -294,6 +305,17 @@ export class SpeechOutput {
     const failure = this.state.service === 'unavailable' ? `${this.state.detail} ` : '';
     this.update({ phase: 'speaking-browser', detail: `${failure}Using ${browserName}. ${extra}` });
     this.synth.speak(utterance);
+    if (this.part === 0) this.prepareHandoff(generation);
+  }
+
+  private prepareHandoff(generation: number) {
+    const handoffPart = Math.max(
+      this.browserLeadSegments,
+      this.part + (this.engine === 'browser' ? 1 : 0),
+    );
+    if (generation !== this.generation || this.disposed || !this.voiceReady || this.edgeFailed
+      || this.textParts.length <= handoffPart || this.prepared) return;
+    this.prepared = { index: handoffPart, result: this.requestAudio(this.textParts[handoffPart]) };
   }
 
   private async requestAudio(text: string): Promise<RequestResult> {

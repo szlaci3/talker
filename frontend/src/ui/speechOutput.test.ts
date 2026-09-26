@@ -72,13 +72,20 @@ describe('speech output', () => {
       ? new Response(JSON.stringify({ voices: [brian] }), { status: 200 })
       : new Response(JSON.stringify({ error: 'Speech synthesis failed.' }), { status: 502 })) as typeof fetch;
     const audio = { src: '', play: vi.fn(async () => {}), pause: vi.fn(), removeAttribute: vi.fn(), load: vi.fn() } as unknown as HTMLAudioElement;
-    const synth = { getVoices: () => [], speak: vi.fn(), pause: vi.fn(), resume: vi.fn(), cancel: vi.fn() } as unknown as SpeechSynthesis;
+    let activeUtterance: SpeechSynthesisUtterance | undefined;
+    const speak = vi.fn((utterance: SpeechSynthesisUtterance) => { activeUtterance = utterance; });
+    const synth = { getVoices: () => [], speak, pause: vi.fn(), resume: vi.fn(), cancel: vi.fn() } as unknown as SpeechSynthesis;
     const output = new SpeechOutput('/api', () => 'session-token', vi.fn(), {
       fetcher, synth, makeAudio: () => audio,
       makeUtterance: text => ({ text, onend: null, onerror: null } as unknown as SpeechSynthesisUtterance),
     });
     await output.warmup();
-    output.play('answer-failed', 'A short answer.');
+    output.play('answer-failed', 'word '.repeat(340));
+    activeUtterance?.onend?.({} as SpeechSynthesisEvent);
+    await waitFor(() => expect(speak).toHaveBeenCalledTimes(2));
+    activeUtterance?.onend?.({} as SpeechSynthesisEvent);
+    await waitFor(() => expect(speak).toHaveBeenCalledTimes(3));
+    activeUtterance?.onend?.({} as SpeechSynthesisEvent);
     await waitFor(() => expect(output.snapshot().service).toBe('unavailable'));
     expect(output.snapshot().detail).toContain('HTTP 502: Speech synthesis failed.');
     output.dispose();
@@ -120,24 +127,68 @@ describe('speech output', () => {
       makeUtterance: text => ({ text, onend: null, onerror: null } as unknown as SpeechSynthesisUtterance),
       createObjectURL: () => 'blob:spoken', revokeObjectURL: vi.fn(),
     });
-    const source = 'The opening sentence. ' + 'word '.repeat(115) + 'The final sentence.';
+    const source = 'The opening sentence. ' + 'word '.repeat(340) + 'The final sentence.';
     const expectedText = speechText(source);
     output.play('answer-1', source);
     expect(activeUtterance?.text).toBe(speechSegments(expectedText)[0]);
 
     finishCatalogue(new Response(JSON.stringify({ voices: [brian] }), { status: 200 }));
     await waitFor(() => expect(output.snapshot().service).toBe('ready'));
-    activeUtterance?.onend?.({} as SpeechSynthesisEvent);
-    await waitFor(() => expect(requests.some(request => request.url.endsWith('/api/speech'))).toBe(true));
+    await waitFor(() => expect(requests.filter(request => request.url.endsWith('/api/speech'))).toHaveLength(1));
+    const parts = speechSegments(expectedText);
+    expect(parts.length).toBeGreaterThan(3);
+    for (let index = 0; index < 3; index++) {
+      activeUtterance?.onend?.({} as SpeechSynthesisEvent);
+      if (index < 2) await waitFor(() => expect(activeUtterance?.text).toBe(parts[index + 1]));
+    }
     await waitFor(() => expect(audio.play).toHaveBeenCalled());
     const request = requests.find(item => item.url.endsWith('/api/speech'));
     const sent = JSON.parse(request?.init?.body as string) as { text: string; voice: string };
-    expect(sent.text).toBe(speechSegments(expectedText)[1]);
+    expect(sent.text).toBe(parts[3]);
     expect(sent.voice).toBe(PREFERRED_VOICE);
     output.stop();
   });
 
-  it('prefetches one next segment and plays all remote segments once in order', async () => {
+  it('waits silently at segment four when Brian audio is late instead of speaking it in the browser voice', async () => {
+    let activeUtterance: SpeechSynthesisUtterance | undefined;
+    let finishBrian!: (response: Response) => void;
+    const synth = {
+      getVoices: () => [{ name: 'Microsoft Daniel Online', lang: 'en-GB' }],
+      speak: vi.fn((utterance: SpeechSynthesisUtterance) => { activeUtterance = utterance; }),
+      pause: vi.fn(), resume: vi.fn(), cancel: vi.fn(),
+    } as unknown as SpeechSynthesis;
+    const audio = {
+      src: '', onended: null, onerror: null,
+      play: vi.fn(async () => {}), pause: vi.fn(), removeAttribute: vi.fn(), load: vi.fn(),
+    } as unknown as HTMLAudioElement;
+    const fetcher = ((input: RequestInfo | URL) => String(input).endsWith('/api/voices')
+      ? Promise.resolve(new Response(JSON.stringify({ voices: [brian] }), { status: 200 }))
+      : new Promise<Response>(resolve => { finishBrian = resolve; })) as typeof fetch;
+    const output = new SpeechOutput('/api', () => 'session-token', vi.fn(), {
+      fetcher, synth, makeAudio: () => audio,
+      makeUtterance: text => ({ text, onend: null, onerror: null } as unknown as SpeechSynthesisUtterance),
+      createObjectURL: () => 'blob:late-handoff', revokeObjectURL: vi.fn(),
+    });
+    const parts = speechSegments('word '.repeat(340).trim());
+    output.play('late-handoff', parts.join(' '));
+    await waitFor(() => expect(output.snapshot().service).toBe('ready'));
+    await waitFor(() => expect(finishBrian).toBeTypeOf('function'));
+
+    for (let index = 0; index < 3; index++) {
+      activeUtterance?.onend?.({} as SpeechSynthesisEvent);
+      if (index < 2) await waitFor(() => expect(activeUtterance?.text).toBe(parts[index + 1]));
+    }
+    await waitFor(() => expect(output.snapshot().phase).toBe('loading'));
+    expect(synth.speak).toHaveBeenCalledTimes(3);
+    expect(audio.play).toHaveBeenCalledTimes(1); // initial browser playback unlock only
+
+    finishBrian(new Response(new Blob(['mp3']), { status: 200 }));
+    await waitFor(() => expect(audio.play).toHaveBeenCalledTimes(1));
+    expect(synth.speak).toHaveBeenCalledTimes(3);
+    output.stop();
+  });
+
+  it('prefetches Brian segment four during browser speech', async () => {
     const requests: Array<{ url: string; init?: RequestInit }> = [];
     const fetcher = (async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
@@ -149,30 +200,32 @@ describe('speech output', () => {
       src: '', onended: null, onerror: null,
       play: vi.fn(async () => {}), pause: vi.fn(), removeAttribute: vi.fn(), load: vi.fn(),
     } as unknown as HTMLAudioElement;
+    const spokenUtterances: SpeechSynthesisUtterance[] = [];
+    const synth = {
+      getVoices: () => [], speak: vi.fn((utterance: SpeechSynthesisUtterance) => { spokenUtterances.push(utterance); }),
+      pause: vi.fn(), resume: vi.fn(), cancel: vi.fn(),
+    } as unknown as SpeechSynthesis;
     const output = new SpeechOutput('/api', () => 'session-token', vi.fn(), {
-      fetcher, synth: null, makeAudio: () => audio,
+      fetcher, synth, makeAudio: () => audio,
+      makeUtterance: text => ({ text, onend: null, onerror: null } as unknown as SpeechSynthesisUtterance),
       createObjectURL: (() => { let index = 0; return () => `blob:${++index}`; })(),
       revokeObjectURL: vi.fn(),
     });
     await output.warmup();
-    const text = 'word '.repeat(205).trim();
+    const text = 'word '.repeat(340).trim();
     const expectedSegments = speechSegments(text);
     output.play('answer-3', text);
 
-    await waitFor(() => expect(requests.filter(item => item.url.endsWith('/api/speech'))).toHaveLength(2));
-    for (let index = 0; index < expectedSegments.length; index++) {
-      const onended = audio.onended as unknown as (() => void);
-      onended();
-      if (index < expectedSegments.length - 1) {
-        await waitFor(() => expect(requests.filter(item => item.url.endsWith('/api/speech')))
-          .toHaveLength(Math.min(expectedSegments.length, index + 3)));
-      }
+    for (let index = 0; index < 3; index++) {
+      const utterance = spokenUtterances.at(-1);
+      utterance?.onend?.({} as SpeechSynthesisEvent);
     }
-    await waitFor(() => expect(output.snapshot().phase).toBe('ended'));
-
+    await waitFor(() => expect(audio.play).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(requests.filter(item => item.url.endsWith('/api/speech'))).toHaveLength(2));
     const spoken = requests.filter(item => item.url.endsWith('/api/speech')).map(item =>
       JSON.parse(item.init?.body as string).text as string);
-    expect(spoken).toEqual(expectedSegments);
+    expect(spoken).toEqual(expectedSegments.slice(3, 5));
+    expect(audio.play).toHaveBeenCalledTimes(2); // unlock plus segment four
     output.stop();
   });
 
