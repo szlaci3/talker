@@ -6,7 +6,7 @@ type Message = {
   id: string;
   role: 'user' | 'assistant';
   content: string;
-  status?: 'pending' | 'complete' | 'interrupted';
+  status?: 'pending' | 'complete' | 'interrupted' | 'canceled';
 };
 
 const API = import.meta.env.VITE_API_URL || 'http://localhost:8080';
@@ -79,7 +79,8 @@ export default function App() {
     setInput('');
     setError('');
     const assistantId = crypto.randomUUID();
-    const userMessage: Message = { id: crypto.randomUUID(), role: 'user', content: body };
+    const userId = crypto.randomUUID();
+    const userMessage: Message = { id: userId, role: 'user', content: body };
     const assistantMessage: Message = { id: assistantId, role: 'assistant', content: '', status: 'pending' };
     setMessages(cur => [...cur, userMessage, assistantMessage]);
     setBusy(true);
@@ -137,12 +138,17 @@ export default function App() {
       }
       setMessages(cur => cur.map(m => m.id === assistantId ? { ...m, status: 'complete' } : m));
     } catch (x) {
-      if ((x as Error).name === 'AbortError') conversationId.current = crypto.randomUUID();
+      const canceled = (x as Error).name === 'AbortError';
+      if (canceled) conversationId.current = crypto.randomUUID();
       else setError((x as Error).message);
-      setMessages(cur => cur.flatMap(m =>
-        m.id !== assistantId ? [m] :
-          m.content.trim() ? [{ ...m, status: 'interrupted' as const }] : []
-      ));
+      setMessages(cur => {
+        const hasPartialAnswer = cur.some(m => m.id === assistantId && m.content.trim());
+        return cur.flatMap(m => {
+          if (m.id === userId && canceled && !hasPartialAnswer) return [{ ...m, status: 'canceled' as const }];
+          if (m.id !== assistantId) return [m];
+          return m.content.trim() ? [{ ...m, status: 'interrupted' as const }] : [];
+        });
+      });
     } finally {
       if (abort.current === ctl) {
         abort.current = null;
@@ -189,7 +195,8 @@ export default function App() {
             {m.role === 'assistant' && m.content
               ? <ReactMarkdown remarkPlugins={[remarkGfm]} skipHtml>{m.content}</ReactMarkdown>
               : m.content || (m.status === 'pending' ? <span className="typing">Thinking<span>…</span></span> : '')}
-            {m.status === 'interrupted' && <span className="interrupted">Stopped</span>}
+            {m.status === 'canceled' && <span className="turn-status">Canceled before a response</span>}
+            {m.status === 'interrupted' && <span className="turn-status">Stopped</span>}
           </div>
         </article>
       )}
