@@ -49,9 +49,9 @@ Acceptance: two related messages preserve context; Stop halts visible output and
 
 ### 2. UI tools and WebMCP
 
-Implement `set_theme`, `set_font_scale`, and `get_ui_preferences` with shared validated handlers. Manual controls and model calls use the same state changes. Add the native WebMCP adapter using current documentation, lifecycle cleanup, and capability detection. If unavailable or registration fails, show a nonblocking notice and continue through the local tool registry. Avoid claiming native support from property existence alone.
+Implement `set_theme`, `set_font_scale`, `set_ui_color`, `get_ui_preferences`, and `reset_ui` with shared validated handlers. Color changes cover named page/header/message/input backgrounds, main/secondary/input text, and accents; natural-language colors map to validated hex values. Adjust text colors to preserve contrast where possible. Manual controls, Antigravity function calls, and WebMCP registration use the same handlers. Return UI tool results to Antigravity before it completes the answer. Never execute generated JS/CSS. Detect and register the imperative WebMCP tools with cleanup; when unavailable or registration fails, show a nonblocking availability notice while chat and provider-side appearance tools remain usable. Avoid claiming native support from property existence alone.
 
-Acceptance: “make the text bigger” and “switch to dark mode” alter this chat's UI; invalid calls cannot corrupt settings; reset works; retries do not duplicate tool effects; unavailable WebMCP leaves chat usable. Verify native registration AND invocation in a supported environment before calling the WebMCP demonstration complete. If that environment is unavailable, record the gap and continue independent work.
+Acceptance: “make the text bigger”, “switch to dark mode”, “make the input background red”, and “that red is too dark” change the intended UI; text remains readable or the app reports a contrast limitation; invalid calls cannot corrupt settings; reset works; unavailable WebMCP leaves chat usable. Verify native registration AND invocation in a supported environment before calling the WebMCP demonstration complete. If that environment is unavailable, record the gap and continue independent work.
 
 ### 3. Reciter-style speech output
 

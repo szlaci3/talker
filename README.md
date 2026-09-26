@@ -23,10 +23,14 @@ For one real Antigravity smoke test, start the local backend with `CHAT_PROVIDER
 - `TALKER_LIVE_INVITATION_CODE` set to the local invitation code
 - `VITE_API_URL=http://127.0.0.1:8080`
 
-The live test refuses non-local API URLs, checks health/provider configuration, and submits one short chat prompt through the rendered UI. A shared local rate limiter caps Antigravity chat calls at 7 per rolling 60 seconds. The Google API key stays in the backend environment and is never read by the frontend test. Live calls count against the configured account's usage.
+The live test refuses non-local API URLs, checks health/provider configuration, and asks Antigravity to change the input background, then refine it with a natural-language follow-up. Each change returns a tool result to Antigravity using a second model request. A shared local rate limiter caps Antigravity requests at 7 per rolling 60 seconds. The Google API key stays in the backend environment and is never read by the frontend test. Live calls count against the configured account's usage.
+
+## Conversational appearance
+
+The assistant can change the theme, text size, or one named chat color (page/header/message/input backgrounds, main/secondary/input text, and accent) from natural-language requests. Color values are validated hex colors; text colors are adjusted for contrast. Changes persist in this browser and can be reset from the Colors control. The assistant cannot generate or execute CSS/JavaScript. The browser registers these same actions with WebMCP when that API is available; otherwise the page shows an availability notice and chat remains usable. Native WebMCP invocation still needs verification in a supported browser/agent.
 
 ## Hosting
 
 `frontend/netlify.toml` configures the static frontend and `render.yaml` describes the Python API. Set secrets in the hosting dashboards, set the deployed Netlify origin in `ALLOWED_ORIGINS`, and set `VITE_API_URL` to the Render API URL at frontend build time. Netlify and Render are deployed; the user reports production chat and cancellation recovery working.
 
-The current entry-attempt and chat caps live in process memory. They reset on service restarts and are not public quota enforcement; add durable/platform limits before sharing publicly. This milestone does not implement WebMCP, model-driven UI actions, voice, or conversation persistence.
+The current entry-attempt and chat caps live in process memory. They reset on service restarts and are not public quota enforcement; add durable/platform limits before sharing publicly. The typed chat and bounded conversational appearance controls are implemented; voice and conversation persistence are not.

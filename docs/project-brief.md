@@ -8,7 +8,7 @@ Updated: 2026-09-26. Status: Talker milestone 1 is deployed; user reports succes
 - Target standard desktop browsers; phones are out of scope. When WebMCP is unavailable, display a notice and continue with the best available fallbacks. Native WebMCP is not required in every browser; desktop browser/OS coverage is partial and not fully verified; this limitation is accepted.
 - Initially one chat screen, visually familiar to ChatGPT, one conversation, no sidebars. Typed messages and answers form the first MVP.
 - General-purpose assistant with suggested prompts demonstrating conversational UI changes (user accepted this recommendation).
-- Users can request changes to the interface they are using, e.g. larger fonts, dark mode, or light mode.
+- Users can request theme and font-size changes, plus natural-language color changes for named UI areas: page/header/message/input backgrounds, main/secondary/input text, and accents. Follow-ups such as “that red is too dark” should adjust the last color target. Do not implement arbitrary UI changes, typography styles, or generated CSS/JavaScript.
 - Voice output must use `edge-tts`, following the voice experience in the user's Reciter website: Daniel during warmup, then preferably always Microsoft Brian Multilingual Online (Natural) - English (United States). Reciter's fallback mechanism has been inspected; Brian's exact service identifier remains unverified. Later voice input must show evolving transcription while the user speaks, without waiting for dictation to finish before displaying text.
 - Voice mode must be hands-free after activation: detect end of turn, submit automatically, speak the answer, and continue listening. Show words as recognition produces them, allow revisions within seconds, and visually mark those corrections. When the user starts speaking during an answer, stop the assistant's speech immediately and listen; this interruption behavior is confirmed.
 - Use the Antigravity managed agent as the production provider. The user reports higher daily and per-minute token quotas for it than for direct Gemini and has decided not to implement Gemini fallback.
@@ -23,7 +23,7 @@ Flow: Netlify browser chat -> Render API -> Antigravity -> streamed answer/tool 
 
 Keep the Google key in Render server environment variables, never in the browser bundle, browser storage, or a VITE-prefixed variable. Backend responsibilities: entry/session validation, request limits for chat and TTS, input/context/output bounds, provider calls, timeouts, cancellation, and useful quota errors. Initial chat history lives only in page state and clears on reload. Antigravity interaction IDs are bound to a per-page conversation ID, separate from the access token, so reload begins a new model conversation. No conversation database is used. Shared usage counters require platform enforcement or durable storage rather than restart-sensitive process memory.
 
-Use one small action registry, initially `set_theme`, `set_font_scale`, and `get_ui_preferences`. Validate enumerations and numeric bounds. Manual controls and model tools use the same handlers, updating React state and CSS variables. UI actions must be reversible, with manual reset available. Do not allow arbitrary generated scripts, markup, or styles.
+Use one small action registry: `set_theme`, `set_font_scale`, `set_ui_color`, `get_ui_preferences`, and `reset_ui`. Validate enumerations, numeric bounds, color targets, and hex colors. Manual controls, Antigravity function calls, and WebMCP registration share the same handlers, updating React state and CSS variables. Persist appearance locally, keep actions reversible, and provide a reset. Adjust foreground colors to preserve readable contrast when possible, and report when conflicting custom surfaces prevent the target contrast. Do not allow arbitrary generated scripts, markup, or styles.
 
 ## WebMCP feasibility
 
@@ -35,7 +35,7 @@ Expose the shared actions through a small WebMCP adapter. On a compatible implem
 
 Google currently documents `antigravity-preview-09-2026`, defaulting to `gemini-3.8-flash`, with free- and paid-tier API access. It is a managed agent with a remote sandbox and potentially long autonomous workflows. This is distinct from a direct model call and from an IDE subscription. See [Antigravity API](https://ai.google.dev/gemini-api/docs/antigravity-agent).
 
-The user's quota comparison is account-specific and user-reported. Direct Gemini fallback is explicitly out of scope. The user reports 28 requests in one day without quota errors; this does not establish the provider's full daily limit. The Antigravity API uses the Interactions endpoint and agent ID `antigravity-preview-09-2026`; it is not a Gemini model ID for `GOOGLE_MODEL`. The agent currently defaults to Gemini 3.8 Flash under its managed harness, with a separate supported-model setting. The app disables agent tools for chat and keeps each turn in backend-managed interaction state. See the [managed agents quickstart](https://ai.google.dev/gemini-api/docs/managed-agents-quickstart) and [streaming guide](https://ai.google.dev/gemini-api/docs/streaming).
+The user's quota comparison is account-specific and user-reported. Direct Gemini fallback is explicitly out of scope. The user reports 28 requests in one day without quota errors; this does not establish the provider's full daily limit. The Antigravity API uses the Interactions endpoint and agent ID `antigravity-preview-09-2026`; it is not a Gemini model ID for `GOOGLE_MODEL`. The agent currently defaults to Gemini 3.8 Flash under its managed harness, with a separate supported-model setting. The app overrides default agent tools with only its validated appearance functions; it does not enable code execution, browsing, or filesystem tools. Each turn remains in backend-managed interaction state. See the [managed agents quickstart](https://ai.google.dev/gemini-api/docs/managed-agents-quickstart) and [streaming guide](https://ai.google.dev/gemini-api/docs/streaming).
 
 Actual model access and free quotas must be checked in the user's Google AI Studio project. Quotas are shared per project, not multiplied per visitor or API key; published limits do not guarantee capacity. Provide an explicit exhausted-quota state and bounded retries. See [rate limits](https://ai.google.dev/gemini-api/docs/rate-limits).
 
@@ -64,7 +64,7 @@ A date or predictable daily counter is light friction, not meaningful bot resist
 ## Delivery sequence and acceptance
 
 1. Text MVP: responsive single-thread chat, typed input, real streamed Google answers, loading/error/stop behavior, protected key, bounded usage, and chosen entry gate before public sharing.
-2. Portfolio demonstration: conversational theme/font changes across target desktop browsers, notice and best-effort fallback when WebMCP is unavailable, and verified native tool registration/invocation where supported.
+2. Portfolio demonstration: conversational theme/font and bounded natural-language color changes, notice and best-effort behavior when WebMCP is unavailable, and verified native tool registration/invocation where supported.
 3. Voice output: Reciter-like play/stop and warmup experience using `edge-tts`, preferring verified Brian; verify Daniel's fallback availability and safe switching.
 4. Hands-free voice: live partial transcription with correction effects, automatic end-of-turn submission and spoken answers, continued listening, duplicate-send/echo prevention, and a transcription fallback for target desktop browsers lacking native recognition.
 
@@ -77,4 +77,4 @@ Verify each milestone against its behavior before expanding scope. Do not claim 
 - Voice languages; transcript persistence; silence timing and treatment of late transcript corrections after a turn is sent. Immediate interruption on user speech is confirmed.
 - Exact entry-code mechanism.
 
-Next step: continue with milestone 2 from the delivery sequence, the portfolio demonstration. The text MVP is already deployed and verified; see [implementation-status.md](implementation-status.md).
+Next step: manually verify the milestone 2 color request, follow-up adjustment, contrast handling, and reset after deploy. Native WebMCP invocation still needs a supported browser/agent; see [implementation-status.md](implementation-status.md).

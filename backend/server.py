@@ -26,6 +26,28 @@ usage = defaultdict(deque)
 global_usage = deque()
 antigravity_sessions = {}
 antigravity_locks = defaultdict(asyncio.Lock)
+UI_TOOLS = [
+    {"type": "function", "name": "set_theme", "description": "Set the chat theme to light, dark, or system.", "parameters": {"type": "object", "properties": {"theme": {"type": "string", "enum": ["system", "light", "dark"]}}, "required": ["theme"]}},
+    {"type": "function", "name": "set_font_scale", "description": "Set chat text size from 0.85 (smaller) to 1.3 (larger), where 1 is the default.", "parameters": {"type": "object", "properties": {"scale": {"type": "number", "minimum": 0.85, "maximum": 1.3}}, "required": ["scale"]}},
+    {"type": "function", "name": "set_ui_color", "description": "Change one named chat UI color. Convert the user's natural-language color request to a six-digit hex color. For a follow-up, adjust the previously changed target. Use readable text colors.", "parameters": {"type": "object", "properties": {"target": {"type": "string", "enum": ["pageBackground", "headerBackground", "messageBackground", "userMessageBackground", "composerBackground", "primaryText", "mutedText", "accent", "composerText"]}, "color": {"type": "string", "pattern": "^#[0-9A-Fa-f]{6}$"}}, "required": ["target", "color"]}},
+    {"type": "function", "name": "get_ui_preferences", "description": "Read the current theme, font size, and chat colors before making a requested appearance change.", "parameters": {"type": "object", "properties": {}}},
+    {"type": "function", "name": "reset_ui", "description": "Reset the theme, font size, and chat colors to their defaults.", "parameters": {"type": "object", "properties": {}}},
+]
+MAX_UI_TOOL_CALLS = 4
+UI_COLOR_TARGETS = {"pageBackground", "headerBackground", "messageBackground", "userMessageBackground", "composerBackground", "primaryText", "mutedText", "accent", "composerText"}
+
+
+def valid_ui_tool_call(name, arguments):
+    if not isinstance(name, str) or not isinstance(arguments, dict):
+        return False
+    if name == "set_theme":
+        return set(arguments) == {"theme"} and arguments["theme"] in {"system", "light", "dark"}
+    if name == "set_font_scale":
+        value = arguments.get("scale")
+        return set(arguments) == {"scale"} and isinstance(value, (int, float)) and not isinstance(value, bool) and 0.85 <= value <= 1.3
+    if name == "set_ui_color":
+        return set(arguments) == {"target", "color"} and arguments.get("target") in UI_COLOR_TARGETS and isinstance(arguments.get("color"), str) and len(arguments["color"]) == 7 and arguments["color"].startswith("#") and all(char in "0123456789abcdefABCDEF" for char in arguments["color"][1:])
+    return name in {"get_ui_preferences", "reset_ui"} and set(arguments) == set()
 
 
 def secret(name, minimum=1):
@@ -83,6 +105,31 @@ def rate_check(bucket, key, limit, window):
     entries.append(now)
 
 
+def count_model_request(session_key):
+    rate_check(usage, session_key, 30, 3600)
+    utc_day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    now = time.time()
+    cap = int(os.getenv("MAX_DAILY_REQUESTS", "250"))
+    while global_usage and global_usage[0][1] != utc_day:
+        global_usage.popleft()
+    if len(global_usage) >= cap:
+        raise web.HTTPTooManyRequests(text='{"error":"The daily chat limit has been reached. Please try again tomorrow."}', content_type="application/json")
+    global_usage.append((now, utc_day))
+
+
+def request_identity(request):
+    auth = request.headers.get("Authorization", "")
+    bearer = auth[7:] if auth.startswith("Bearer ") else ""
+    if not valid_token(bearer):
+        raise web.HTTPUnauthorized(text='{"error":"Your session expired. Enter the code again."}', content_type="application/json")
+    raw_conversation_id = request.headers.get("X-Conversation-ID", "")
+    try:
+        conversation_id = str(uuid.UUID(raw_conversation_id))
+    except (ValueError, AttributeError):
+        raise web.HTTPBadRequest(text='{"error":"A valid conversation ID is required."}', content_type="application/json")
+    return hashlib.sha256(bearer.encode()).hexdigest(), conversation_id
+
+
 async def read_json(request):
     if request.content_length and request.content_length > MAX_BODY:
         raise web.HTTPRequestEntityTooLarge(max_size=MAX_BODY, actual_size=request.content_length)
@@ -131,27 +178,10 @@ async def write_event(response, value):
 
 
 async def chat_route(request):
-    auth = request.headers.get("Authorization", "")
-    bearer = auth[7:] if auth.startswith("Bearer ") else ""
-    if not valid_token(bearer):
-        raise web.HTTPUnauthorized(text='{"error":"Your session expired. Enter the code again."}', content_type="application/json")
-    session_key = hashlib.sha256(bearer.encode()).hexdigest()
-    raw_conversation_id = request.headers.get("X-Conversation-ID", "")
-    try:
-        conversation_id = str(uuid.UUID(raw_conversation_id))
-    except (ValueError, AttributeError):
-        raise web.HTTPBadRequest(text='{"error":"A valid conversation ID is required."}', content_type="application/json")
-    rate_check(usage, session_key, 30, 3600)
-    utc_day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    now = time.time()
-    cap = int(os.getenv("MAX_DAILY_REQUESTS", "250"))
-    while global_usage and global_usage[0][1] != utc_day:
-        global_usage.popleft()
-    if len(global_usage) >= cap:
-        raise web.HTTPTooManyRequests(text='{"error":"The daily chat limit has been reached. Please try again tomorrow."}', content_type="application/json")
+    session_key, conversation_id = request_identity(request)
     data = await read_json(request)
     messages = get_messages(data)
-    global_usage.append((now, utc_day))
+    count_model_request(session_key)
     provider = os.getenv("CHAT_PROVIDER", "antigravity").strip().lower()
     response = web.StreamResponse(status=200, headers={**cors_headers(request), "Content-Type": "text/event-stream", "Cache-Control": "no-cache, no-transform", "X-Accel-Buffering": "no"})
     await response.prepare(request)
@@ -188,6 +218,104 @@ async def chat_route(request):
     except ConnectionResetError:
         pass
     return response
+
+
+async def ui_tool_result_route(request):
+    session_key, conversation_id = request_identity(request)
+    data = await read_json(request)
+    results = data.get("toolResults")
+    if not isinstance(results, list) or not 1 <= len(results) <= MAX_UI_TOOL_CALLS:
+        raise web.HTTPBadRequest(text='{"error":"UI tool results are invalid."}', content_type="application/json")
+    async with antigravity_locks[session_key]:
+        state = antigravity_sessions.get(session_key)
+        calls = state.get("pending_tool_calls", []) if state and state.get("conversation_id") == conversation_id else []
+        if len(results) != len(calls):
+            raise web.HTTPConflict(text='{"error":"The UI action request has expired. Please try again."}', content_type="application/json")
+        function_results = []
+        for expected, supplied in zip(calls, results):
+            if not isinstance(supplied, dict) or supplied.get("callId") != expected["id"] or not isinstance(supplied.get("result"), dict):
+                raise web.HTTPBadRequest(text='{"error":"UI tool results are invalid."}', content_type="application/json")
+            result = supplied["result"]
+            if not isinstance(result.get("ok"), bool) or not isinstance(result.get("message"), str):
+                raise web.HTTPBadRequest(text='{"error":"UI tool results are invalid."}', content_type="application/json")
+            function_results.append({
+                "type": "function_result",
+                "name": expected["name"],
+                "call_id": expected["id"],
+                "result": {"ok": result["ok"], "message": result["message"][:500]},
+            })
+
+        count_model_request(session_key)
+        api_key = secret("GOOGLE_API_KEY", 12)
+        agent = os.getenv("ANTIGRAVITY_AGENT", "antigravity-preview-09-2026")
+        payload = {
+            "agent": agent,
+            "previous_interaction_id": state["interaction_id"],
+            "environment": state["environment_id"],
+            "input": function_results,
+            "stream": True,
+        }
+        model = os.getenv("ANTIGRAVITY_MODEL", "").strip()
+        if model:
+            payload["agent_config"] = {"type": "antigravity", "model": model}
+        url = "https://generativelanguage.googleapis.com/v1beta/interactions"
+        response = web.StreamResponse(status=200, headers={**cors_headers(request), "Content-Type": "text/event-stream", "Cache-Control": "no-cache, no-transform", "X-Accel-Buffering": "no"})
+        await response.prepare(request)
+        interaction_id = None
+        environment_id = state["environment_id"]
+        completed = False
+        try:
+            async with ClientSession(timeout=ClientTimeout(total=180, connect=10, sock_read=90)) as session:
+                async with session.post(url, json=payload, headers={"x-goog-api-key": api_key}) as upstream:
+                    if upstream.status != 200:
+                        await upstream.read()
+                        message = "The Antigravity quota is exhausted." if upstream.status == 429 else f"Antigravity request failed (HTTP {upstream.status}). Check API access and agent configuration."
+                        await write_event(response, {"error": message})
+                    else:
+                        async for raw in upstream.content:
+                            line = raw.decode("utf-8", "replace").strip()
+                            if not line.startswith("data:"):
+                                continue
+                            data_line = line[5:].strip()
+                            if data_line == "[DONE]":
+                                break
+                            try:
+                                event = json.loads(data_line)
+                            except ValueError:
+                                continue
+                            event_type = event.get("event_type") or event.get("type")
+                            interaction = event.get("interaction") or {}
+                            if interaction.get("id"):
+                                interaction_id = interaction["id"]
+                            if interaction.get("environment_id"):
+                                environment_id = interaction["environment_id"]
+                            if event_type == "step.delta":
+                                delta = event.get("delta") or {}
+                                if delta.get("type") == "text" and delta.get("text"):
+                                    await write_event(response, {"delta": delta["text"]})
+                            elif event_type == "interaction.completed":
+                                completed = interaction.get("status", "completed") == "completed"
+                                if not completed:
+                                    await write_event(response, {"error": "Antigravity did not complete the UI action response."})
+                            elif event_type in ("interaction.failed", "error"):
+                                await write_event(response, {"error": "Antigravity could not complete the UI action response."})
+            if completed and interaction_id:
+                antigravity_sessions[session_key] = {"provider": "antigravity", "conversation_id": conversation_id, "interaction_id": interaction_id, "environment_id": environment_id}
+            elif not completed:
+                # Leave the pending call intact so a retry is possible after a transient interruption.
+                pass
+        except (asyncio.CancelledError, ConnectionResetError):
+            raise
+        except Exception:
+            try:
+                await write_event(response, {"error": "The chat connection ended unexpectedly. Please try again."})
+            except ConnectionResetError:
+                pass
+        try:
+            await response.write(b"data: [DONE]\n\n")
+        except ConnectionResetError:
+            pass
+        return response
 
 
 async def stream_gemini(response, messages):
@@ -235,8 +363,8 @@ async def stream_antigravity(response, session_key, conversation_id, messages):
         "input": prompt,
         "environment": environment,
         "stream": True,
-        "tools": [],
-        "system_instruction": "You are a helpful general-purpose assistant in a developer portfolio chat. Keep answers clear and concise. You are chat-only: do not execute code, browse, access files, or claim this app has UI controls, WebMCP, or voice features.",
+        "tools": UI_TOOLS,
+        "system_instruction": "You are a helpful general-purpose assistant in a developer portfolio chat. Keep answers clear and concise. You can change only the chat appearance using the declared UI functions. Call at most one UI function at a time, and use it only when the user clearly requests an appearance change or asks to inspect/reset it; normal chat and discussion about UI should not trigger a function. Never claim a change was applied unless its function result says it succeeded. Ask which component the user means when a color request has no clear target. Never execute code, browse, access files, or claim voice features.",
     }
     if previous_id:
         payload["previous_interaction_id"] = previous_id
@@ -248,6 +376,10 @@ async def stream_antigravity(response, session_key, conversation_id, messages):
     interaction_id = None
     environment_id = state.get("environment_id") if state else None
     completed = False
+    requires_action = False
+    active_tool_call = None
+    tool_calls = []
+    invalid_tool_call = False
     async with ClientSession(timeout=timeout) as session:
         async with session.post(url, json=payload, headers={"x-goog-api-key": api_key}) as upstream:
             if upstream.status != 200:
@@ -272,30 +404,66 @@ async def stream_antigravity(response, session_key, conversation_id, messages):
                     interaction_id = interaction["id"]
                 if interaction.get("environment_id"):
                     environment_id = interaction["environment_id"]
-                if event_type == "step.delta":
+                if event_type == "step.start":
+                    step = event.get("step") or {}
+                    if step.get("type") == "function_call":
+                        active_tool_call = {"id": step.get("id"), "name": step.get("name"), "arguments": ""}
+                elif event_type == "step.delta":
                     delta = event.get("delta") or {}
                     if delta.get("type") == "text" and delta.get("text"):
                         await write_event(response, {"delta": delta["text"]})
+                    elif active_tool_call and delta.get("type") == "arguments_delta":
+                        partial = delta.get("arguments", "")
+                        if isinstance(partial, str):
+                            active_tool_call["arguments"] += partial
+                elif event_type == "step.stop" and active_tool_call:
+                    try:
+                        args = json.loads(active_tool_call["arguments"] or "{}")
+                    except json.JSONDecodeError:
+                        args = None
+                    if active_tool_call.get("id") and active_tool_call.get("name") and valid_ui_tool_call(active_tool_call["name"], args):
+                        tool_calls.append({**active_tool_call, "arguments": args})
+                    else:
+                        invalid_tool_call = True
+                    active_tool_call = None
                 elif event_type == "interaction.completed":
-                    completed = interaction.get("status", "completed") == "completed"
+                    status = interaction.get("status", "completed")
+                    completed = status == "completed"
+                    requires_action = status == "requires_action"
                     if completed:
                         antigravity_sessions[session_key] = {"provider": "antigravity", "conversation_id": conversation_id, "interaction_id": interaction_id, "environment_id": environment_id}
-                    else:
+                    elif not requires_action:
                         await write_event(response, {"error": "Antigravity did not complete this response."})
                 elif event_type in ("interaction.failed", "error"):
                     await write_event(response, {"error": "Antigravity could not complete this response. Check API access and quota."})
-    if completed and interaction_id and not environment_id:
+    if (completed or requires_action) and interaction_id and not environment_id:
         # Lifecycle SSE payloads omit environment_id; fetch the full interaction once at turn end.
         async with ClientSession(timeout=ClientTimeout(total=15, connect=5)) as session:
             async with session.get(f"{url}/{interaction_id}", headers={"x-goog-api-key": api_key}) as detail:
                 if detail.status == 200:
                     full_interaction = await detail.json()
                     environment_id = full_interaction.get("environment_id")
-    if completed and interaction_id and environment_id:
+    if requires_action and interaction_id and environment_id and tool_calls and not invalid_tool_call:
+        if len(tool_calls) > MAX_UI_TOOL_CALLS:
+            antigravity_sessions.pop(session_key, None)
+            await write_event(response, {"error": "The assistant requested too many UI changes at once."})
+            return
+        antigravity_sessions[session_key] = {
+            "provider": "antigravity",
+            "conversation_id": conversation_id,
+            "interaction_id": interaction_id,
+            "environment_id": environment_id,
+            "pending_tool_calls": tool_calls,
+        }
+        await write_event(response, {"tool_calls": tool_calls})
+    elif completed and interaction_id and environment_id:
         antigravity_sessions[session_key] = {"provider": "antigravity", "conversation_id": conversation_id, "interaction_id": interaction_id, "environment_id": environment_id}
     elif completed:
         antigravity_sessions.pop(session_key, None)
         await write_event(response, {"error": "Antigravity did not return conversation state; please start a new chat session."})
+    elif requires_action:
+        antigravity_sessions.pop(session_key, None)
+        await write_event(response, {"error": "Antigravity requested an unsupported UI action."})
 
 
 def create_app():
@@ -303,6 +471,7 @@ def create_app():
     app.router.add_get("/healthz", health)
     app.router.add_post("/api/session", session_route)
     app.router.add_post("/api/chat", chat_route)
+    app.router.add_post("/api/ui-tool-result", ui_tool_result_route)
     app.router.add_route("OPTIONS", "/{tail:.*}", lambda request: web.Response(status=204))
     return app
 
