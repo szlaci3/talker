@@ -254,6 +254,8 @@ async def ui_tool_result_route(request):
             "environment": state["environment_id"],
             "input": function_results,
             "stream": True,
+            "tools": UI_TOOLS,
+            "system_instruction": "You are a helpful general-purpose assistant in a developer portfolio chat. Keep answers clear and concise. You can change only the chat appearance using the declared UI functions. Call at most one UI function at a time, and use it only when the user clearly requests an appearance change or asks to inspect/reset it; normal chat and discussion about UI should not trigger a function. Never claim a change was applied unless its function result says it succeeded. Ask which component the user means when a color request has no clear target. Never execute code, browse, access files, or claim voice features.",
         }
         model = os.getenv("ANTIGRAVITY_MODEL", "").strip()
         if model:
@@ -264,6 +266,11 @@ async def ui_tool_result_route(request):
         interaction_id = None
         environment_id = state["environment_id"]
         completed = False
+        requires_action = False
+        active_tool_call = None
+        tool_calls = []
+        invalid_tool_call = False
+        failed = False
         try:
             async with ClientSession(timeout=ClientTimeout(total=180, connect=10, sock_read=90)) as session:
                 async with session.post(url, json=payload, headers={"x-goog-api-key": api_key}) as upstream:
@@ -289,21 +296,62 @@ async def ui_tool_result_route(request):
                                 interaction_id = interaction["id"]
                             if interaction.get("environment_id"):
                                 environment_id = interaction["environment_id"]
-                            if event_type == "step.delta":
+                            if event_type == "step.start":
+                                step = event.get("step") or {}
+                                if step.get("type") == "function_call":
+                                    active_tool_call = {"id": step.get("id"), "name": step.get("name"), "arguments": ""}
+                            elif event_type == "step.delta":
                                 delta = event.get("delta") or {}
                                 if delta.get("type") == "text" and delta.get("text"):
                                     await write_event(response, {"delta": delta["text"]})
+                                elif active_tool_call and delta.get("type") == "arguments_delta":
+                                    partial = delta.get("arguments", "")
+                                    if isinstance(partial, str):
+                                        active_tool_call["arguments"] += partial
+                            elif event_type == "step.stop" and active_tool_call:
+                                try:
+                                    args = json.loads(active_tool_call["arguments"] or "{}")
+                                except json.JSONDecodeError:
+                                    args = None
+                                if active_tool_call.get("id") and active_tool_call.get("name") and valid_ui_tool_call(active_tool_call["name"], args):
+                                    tool_calls.append({**active_tool_call, "arguments": args})
+                                else:
+                                    invalid_tool_call = True
+                                active_tool_call = None
                             elif event_type == "interaction.completed":
-                                completed = interaction.get("status", "completed") == "completed"
-                                if not completed:
-                                    await write_event(response, {"error": "Antigravity did not complete the UI action response."})
+                                status = interaction.get("status", "completed")
+                                completed = status == "completed"
+                                requires_action = status == "requires_action"
+                                failed = not completed and not requires_action
                             elif event_type in ("interaction.failed", "error"):
-                                await write_event(response, {"error": "Antigravity could not complete the UI action response."})
+                                failed = True
+            if (completed or requires_action) and interaction_id and not environment_id:
+                async with ClientSession(timeout=ClientTimeout(total=15, connect=5)) as session:
+                    async with session.get(f"{url}/{interaction_id}", headers={"x-goog-api-key": api_key}) as detail:
+                        if detail.status == 200:
+                            full_interaction = await detail.json()
+                            environment_id = full_interaction.get("environment_id")
             if completed and interaction_id:
                 antigravity_sessions[session_key] = {"provider": "antigravity", "conversation_id": conversation_id, "interaction_id": interaction_id, "environment_id": environment_id}
+            elif requires_action and interaction_id and environment_id and tool_calls and not invalid_tool_call:
+                if len(tool_calls) > MAX_UI_TOOL_CALLS:
+                    antigravity_sessions.pop(session_key, None)
+                    await write_event(response, {"error": "The assistant requested too many UI changes at once."})
+                else:
+                    antigravity_sessions[session_key] = {
+                        "provider": "antigravity",
+                        "conversation_id": conversation_id,
+                        "interaction_id": interaction_id,
+                        "environment_id": environment_id,
+                        "pending_tool_calls": tool_calls,
+                    }
+                    await write_event(response, {"tool_calls": tool_calls})
+            elif requires_action:
+                antigravity_sessions.pop(session_key, None)
+                await write_event(response, {"error": "Antigravity requested an unsupported UI action."})
             elif not completed:
-                # Leave the pending call intact so a retry is possible after a transient interruption.
-                pass
+                antigravity_sessions.pop(session_key, None)
+                await write_event(response, {"error": "Antigravity could not complete the UI action response." if failed else "Antigravity did not complete the UI action response."})
         except (asyncio.CancelledError, ConnectionResetError):
             raise
         except Exception:

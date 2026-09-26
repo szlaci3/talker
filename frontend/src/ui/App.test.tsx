@@ -134,6 +134,25 @@ describe('conversational appearance tools', () => {
     });
   });
 
+  it('continues a second appearance action requested after the first tool result', async () => {
+    fetchMock.mockResolvedValueOnce(eventStream({
+      tool_calls: [{ id: 'tool-green', name: 'set_ui_color', arguments: { target: 'messageBackground', color: '#aaffaa' } }],
+    }));
+    fetchMock.mockResolvedValueOnce(eventStream({
+      tool_calls: [{ id: 'tool-blue', name: 'set_ui_color', arguments: { target: 'messageBackground', color: '#aaddff' } }],
+    }));
+    fetchMock.mockResolvedValueOnce(eventStream({ delta: 'I changed the assistant message background to light blue.' }));
+
+    const user = userEvent.setup();
+    render(<App />);
+    await user.type(screen.getByRole('textbox', { name: 'Message' }), 'Make assistant message background light green-yellow, then light blue');
+    await user.click(screen.getByRole('button', { name: '↑' }));
+
+    expect(await screen.findByText('I changed the assistant message background to light blue.')).toBeInTheDocument();
+    expect(document.documentElement.style.getPropertyValue('--ui-message-bg')).toBe('#aaddff');
+    expect(fetchMock.mock.calls.filter(([url]) => String(url).endsWith('/api/ui-tool-result'))).toHaveLength(2);
+  });
+
   it('does not apply an unknown target or malformed color from a model tool call', async () => {
     fetchMock.mockResolvedValueOnce(eventStream({
       tool_calls: [{ id: 'tool-2', name: 'set_ui_color', arguments: { target: 'bodyStyle', color: 'red; background:url(x)' } }],
