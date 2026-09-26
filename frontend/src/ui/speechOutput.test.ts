@@ -60,6 +60,18 @@ describe('speech output', () => {
     output.dispose();
   });
 
+  it('reports the HTTP error from the Brian catalogue endpoint', async () => {
+    const fetcher = (async () => new Response(JSON.stringify({ error: 'Speech backend is unavailable.' }), { status: 404 })) as typeof fetch;
+    const output = new SpeechOutput('/api', () => 'session-token', vi.fn(), { fetcher, synth: null });
+
+    await output.warmup();
+
+    expect(output.snapshot().service).toBe('unavailable');
+    expect(output.snapshot().detail).toContain('HTTP 404: Speech backend is unavailable.');
+    expect(output.snapshot().detail).toContain('Check the speech backend deployment and API URL.');
+    output.dispose();
+  });
+
   it('starts with Daniel during service warm-up, then switches at the exact unread segment', async () => {
     let finishCatalogue!: (response: Response) => void;
     let activeUtterance: SpeechSynthesisUtterance | undefined;

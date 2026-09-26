@@ -123,6 +123,7 @@ export class SpeechOutput {
   }
 
   private async loadVoices() {
+    let lastFailure = 'no response';
     for (let attempt = 0; attempt < 6 && !this.disposed; attempt++) {
       const controller = new AbortController();
       this.voiceControllers.add(controller);
@@ -141,18 +142,27 @@ export class SpeechOutput {
           this.update({ service: 'unavailable', detail: 'Brian is not available from the speech service. Browser speech remains available.' });
           return;
         }
+        lastFailure = `HTTP ${response.status}`;
+        try {
+          const body = await response.json() as { error?: unknown };
+          if (typeof body.error === 'string') lastFailure += `: ${body.error.slice(0, 140)}`;
+        } catch { /* status is still useful when the server has no JSON error body */ }
         if ([400, 401, 403, 404].includes(response.status)) {
-          this.update({ service: 'unavailable', detail: 'Speech service connection failed. Browser speech remains available.' });
+          this.update({ service: 'unavailable', detail: `Brian voice catalogue request failed (${lastFailure}). Check the speech backend deployment and API URL. Browser speech remains available.` });
           return;
         }
-      } catch { /* bounded retry while the hosted backend wakes */ }
+      } catch (error) {
+        lastFailure = controller.signal.aborted
+          ? 'request timed out'
+          : error instanceof Error ? error.message.slice(0, 140) : 'network request failed';
+      }
       finally {
         window.clearTimeout(timeout);
         this.voiceControllers.delete(controller);
       }
       if (attempt < 5 && !this.disposed) await new Promise(resolve => window.setTimeout(resolve, 3000));
     }
-    if (!this.disposed) this.update({ service: 'unavailable', detail: 'Speech service did not wake in time. Browser speech remains available; press Reconnect to retry.' });
+    if (!this.disposed) this.update({ service: 'unavailable', detail: `Brian voice catalogue could not be reached after 6 attempts (last result: ${lastFailure}). Check the speech backend deployment and API URL. Browser speech remains available; press Reconnect to retry.` });
   }
 
   unlock() {
