@@ -6,7 +6,7 @@ export const COLOR_TARGETS = {
   composerBackground: 'Input background',
   primaryText: 'Main text',
   mutedText: 'Secondary text',
-  accent: 'Accent color',
+  accent: 'Icons and links',
   composerText: 'Input text',
 } as const;
 
