@@ -173,6 +173,10 @@ async def chat_route(request):
         else:
             await write_event(response, {"error": "CHAT_PROVIDER must be mock, antigravity, or gemini."})
     except (asyncio.CancelledError, ConnectionResetError):
+        if provider == "antigravity":
+            # A canceled interaction may have completed upstream after the client stopped.
+            # Clear its cursor so the next request rebuilds from the visible completed turns.
+            antigravity_sessions.pop(session_key, None)
         raise
     except Exception:
         try:
