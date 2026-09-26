@@ -145,7 +145,9 @@ export default function App() {
       setMessages(cur => {
         const hasPartialAnswer = cur.some(m => m.id === assistantId && m.content.trim());
         return cur.flatMap(m => {
-          if (m.id === userId && canceled && !hasPartialAnswer) return [{ ...m, status: 'canceled' as const }];
+          if (m.id === userId && canceled) {
+            return [{ ...m, status: hasPartialAnswer ? 'interrupted' as const : 'canceled' as const }];
+          }
           if (m.id !== assistantId) return [m];
           return m.content.trim() ? [{ ...m, status: 'interrupted' as const }] : [];
         });
@@ -197,7 +199,7 @@ export default function App() {
               ? <ReactMarkdown remarkPlugins={[remarkGfm]} skipHtml>{m.content}</ReactMarkdown>
               : m.content || (m.status === 'pending' ? <span className="typing">Thinking<span>…</span></span> : '')}
             {m.status === 'canceled' && <span className="turn-status">Canceled before a response</span>}
-            {m.status === 'interrupted' && <span className="turn-status">Stopped</span>}
+            {m.role === 'assistant' && m.status === 'interrupted' && <span className="turn-status">Stopped</span>}
           </div>
         </article>
       )}

@@ -88,7 +88,10 @@ describe('chat cancellation and recovery', () => {
     expect(await screen.findByText('PARTIAL_ANSWER')).toBeInTheDocument();
     await user.click(await screen.findByRole('button', { name: 'Stop' }));
     expect(await screen.findByText('Stopped')).toBeInTheDocument();
+    expect(screen.getAllByText('Stopped')).toHaveLength(1);
     expect(screen.queryByText('Canceled before a response')).not.toBeInTheDocument();
+    expect(screen.getByText('Give a detailed account of the consequences').closest('article')).toHaveClass('stale');
+    expect(screen.getByText('PARTIAL_ANSWER').closest('article')).toHaveClass('stale');
 
     await user.type(textbox, 'What were the consequences?');
     await user.click(screen.getByRole('button', { name: '↑' }));
