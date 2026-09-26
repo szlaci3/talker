@@ -79,15 +79,15 @@ describe('speech output', () => {
       fetcher, synth, makeAudio: () => audio,
       makeUtterance: text => ({ text, onend: null, onerror: null } as unknown as SpeechSynthesisUtterance),
     });
-    await output.warmup();
     output.play('answer-failed', 'word '.repeat(340));
-    activeUtterance?.onend?.({} as SpeechSynthesisEvent);
-    await waitFor(() => expect(speak).toHaveBeenCalledTimes(2));
-    activeUtterance?.onend?.({} as SpeechSynthesisEvent);
-    await waitFor(() => expect(speak).toHaveBeenCalledTimes(3));
-    activeUtterance?.onend?.({} as SpeechSynthesisEvent);
+    await waitFor(() => expect(output.snapshot().service).toBe('ready'));
+    for (let index = 0; index < 3; index++) {
+      activeUtterance?.onend?.({} as SpeechSynthesisEvent);
+      if (index < 2) await waitFor(() => expect(activeUtterance?.text).toBe(speechSegments('word '.repeat(340))[index + 1]));
+    }
     await waitFor(() => expect(output.snapshot().service).toBe('unavailable'));
     expect(output.snapshot().detail).toContain('HTTP 502: Speech synthesis failed.');
+    expect(speak).toHaveBeenCalledTimes(4);
     output.dispose();
   });
 
@@ -149,6 +149,37 @@ describe('speech output', () => {
     output.stop();
   });
 
+  it('starts with Brian on segment one when the service is ready before playback', async () => {
+    const requests: Array<{ url: string; init?: RequestInit }> = [];
+    const fetcher = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      requests.push({ url, init });
+      return url.endsWith('/api/voices')
+        ? new Response(JSON.stringify({ voices: [brian] }), { status: 200 })
+        : new Response(new Blob(['mp3']), { status: 200 });
+    }) as typeof fetch;
+    const audio = {
+      src: '', onended: null, onerror: null,
+      play: vi.fn(async () => {}), pause: vi.fn(), removeAttribute: vi.fn(), load: vi.fn(),
+    } as unknown as HTMLAudioElement;
+    const synth = { getVoices: () => [], speak: vi.fn(), pause: vi.fn(), resume: vi.fn(), cancel: vi.fn() } as unknown as SpeechSynthesis;
+    const output = new SpeechOutput('/api', () => 'session-token', vi.fn(), {
+      fetcher, synth, makeAudio: () => audio,
+      createObjectURL: () => 'blob:first-segment', revokeObjectURL: vi.fn(),
+    });
+    await output.warmup();
+    const parts = speechSegments('The answer starts here. ' + 'word '.repeat(340));
+
+    output.play('ready-before-play', parts.join(' '));
+    await waitFor(() => expect(audio.play).toHaveBeenCalledTimes(2));
+
+    const speechRequests = requests.filter(request => request.url.endsWith('/api/speech'));
+    expect(JSON.parse(speechRequests[0].init?.body as string).text).toBe(parts[0]);
+    expect(synth.speak).not.toHaveBeenCalled();
+    expect(output.snapshot().phase).toBe('speaking-edge');
+    output.stop();
+  });
+
   it('waits silently at segment four when Brian audio is late instead of speaking it in the browser voice', async () => {
     let activeUtterance: SpeechSynthesisUtterance | undefined;
     let finishBrian!: (response: Response) => void;
@@ -185,47 +216,6 @@ describe('speech output', () => {
     finishBrian(new Response(new Blob(['mp3']), { status: 200 }));
     await waitFor(() => expect(audio.play).toHaveBeenCalledTimes(1));
     expect(synth.speak).toHaveBeenCalledTimes(3);
-    output.stop();
-  });
-
-  it('prefetches Brian segment four during browser speech', async () => {
-    const requests: Array<{ url: string; init?: RequestInit }> = [];
-    const fetcher = (async (input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-      requests.push({ url, init });
-      if (url.endsWith('/api/voices')) return new Response(JSON.stringify({ voices: [brian] }), { status: 200 });
-      return new Response(new Blob(['mp3']), { status: 200 });
-    }) as typeof fetch;
-    const audio = {
-      src: '', onended: null, onerror: null,
-      play: vi.fn(async () => {}), pause: vi.fn(), removeAttribute: vi.fn(), load: vi.fn(),
-    } as unknown as HTMLAudioElement;
-    const spokenUtterances: SpeechSynthesisUtterance[] = [];
-    const synth = {
-      getVoices: () => [], speak: vi.fn((utterance: SpeechSynthesisUtterance) => { spokenUtterances.push(utterance); }),
-      pause: vi.fn(), resume: vi.fn(), cancel: vi.fn(),
-    } as unknown as SpeechSynthesis;
-    const output = new SpeechOutput('/api', () => 'session-token', vi.fn(), {
-      fetcher, synth, makeAudio: () => audio,
-      makeUtterance: text => ({ text, onend: null, onerror: null } as unknown as SpeechSynthesisUtterance),
-      createObjectURL: (() => { let index = 0; return () => `blob:${++index}`; })(),
-      revokeObjectURL: vi.fn(),
-    });
-    await output.warmup();
-    const text = 'word '.repeat(340).trim();
-    const expectedSegments = speechSegments(text);
-    output.play('answer-3', text);
-
-    for (let index = 0; index < 3; index++) {
-      const utterance = spokenUtterances.at(-1);
-      utterance?.onend?.({} as SpeechSynthesisEvent);
-    }
-    await waitFor(() => expect(audio.play).toHaveBeenCalledTimes(1));
-    await waitFor(() => expect(requests.filter(item => item.url.endsWith('/api/speech'))).toHaveLength(2));
-    const spoken = requests.filter(item => item.url.endsWith('/api/speech')).map(item =>
-      JSON.parse(item.init?.body as string).text as string);
-    expect(spoken).toEqual(expectedSegments.slice(3, 5));
-    expect(audio.play).toHaveBeenCalledTimes(2); // unlock plus segment four
     output.stop();
   });
 

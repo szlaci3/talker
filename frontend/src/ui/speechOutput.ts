@@ -76,6 +76,7 @@ export class SpeechOutput {
   private prepared: { index: number; result: Promise<RequestResult> } | null = null;
   private engine: 'edge' | 'browser' | null = null;
   private readonly browserLeadSegments = 3;
+  private startWithBrian = false;
 
   constructor(
     private api: string,
@@ -183,6 +184,7 @@ export class SpeechOutput {
 
   play(messageId: string, markdown: string) {
     this.stop(false);
+    this.startWithBrian = this.voiceReady;
     const visibleText = speechText(markdown);
     this.textParts = speechSegments(visibleText);
     if (!this.textParts.length) return;
@@ -214,7 +216,7 @@ export class SpeechOutput {
       this.engine = null;
       return;
     }
-    if (this.part < this.browserLeadSegments) {
+    if (!this.startWithBrian && this.part < this.browserLeadSegments) {
       this.playBrowserPart(generation);
       return;
     }
