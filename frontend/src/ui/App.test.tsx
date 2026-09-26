@@ -194,6 +194,21 @@ describe('conversational appearance tools', () => {
     });
   });
 
+  it('keeps the color picker panel separate from a custom composer color in dark mode', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Theme' }), 'dark');
+    await user.click(screen.getByText('Colors'));
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Color target' }), 'composerBackground');
+    fireEvent.change(screen.getByLabelText('Color value'), { target: { value: '#ff0000' } });
+
+    await waitFor(() => {
+      expect(document.documentElement.dataset.theme).toBe('dark');
+      expect(document.documentElement.style.getPropertyValue('--ui-composer-bg')).toBe('#ff0000');
+      expect(document.documentElement.style.getPropertyValue('--ui-color-panel-bg')).toBe('');
+    });
+  });
+
   it('registers the shared actions when a WebMCP ModelContext is available', async () => {
     const registered: Array<Record<string, unknown>> = [];
     const registerTool = vi.fn(async (tool: Record<string, unknown>) => { registered.push(tool); });

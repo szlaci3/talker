@@ -1,0 +1,9 @@
+:root[data-theme=dark] .composer {
+  background: var(--ui-composer-bg);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme=light]):not([data-theme=dark]) .composer {
+    background: var(--ui-composer-bg);
+  }
+}
