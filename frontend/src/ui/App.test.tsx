@@ -15,6 +15,10 @@ function eventStream(...events: Array<Record<string, unknown>>) {
   return { ok: true, status: 200, body } as Response;
 }
 
+function voiceCatalogue() {
+  return new Response(JSON.stringify({ voices: [{ name: 'en-US-BrianMultilingualNeural', locale: 'en-US', friendlyName: 'Brian' }] }), { status: 200 });
+}
+
 function responseAfterAbort(signal: AbortSignal | undefined, delta: string) {
   const encoder = new TextEncoder();
   const body = new ReadableStream<Uint8Array>({
@@ -39,6 +43,7 @@ describe('chat cancellation and recovery', () => {
   beforeEach(() => {
     sessionStorage.setItem('chat-token', 'test-session-token');
     fetchMock = vi.fn();
+    fetchMock.mockResolvedValueOnce(voiceCatalogue());
     vi.stubGlobal('fetch', fetchMock);
   });
 
@@ -63,7 +68,7 @@ describe('chat cancellation and recovery', () => {
     await user.click(screen.getByRole('button', { name: '↑' }));
     expect(await screen.findByText('STRAWBERRY_REPLY')).toBeInTheDocument();
 
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(fetchMock.mock.calls.filter(([url]) => String(url).endsWith('/api/chat'))).toHaveLength(2));
     expect(chatPayload(fetchMock, 1).messages).toEqual([
       { role: 'user', content: 'How many r letters are in strawberry?' },
     ]);
@@ -111,6 +116,7 @@ describe('conversational appearance tools', () => {
   beforeEach(() => {
     sessionStorage.setItem('chat-token', 'test-session-token');
     fetchMock = vi.fn();
+    fetchMock.mockResolvedValueOnce(voiceCatalogue());
     vi.stubGlobal('fetch', fetchMock);
   });
 

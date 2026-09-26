@@ -23,9 +23,17 @@ MAX_TEXT = 12_000
 SESSION_TTL = 8 * 60 * 60
 attempts = defaultdict(deque)
 usage = defaultdict(deque)
+speech_usage = defaultdict(deque)
 global_usage = deque()
 antigravity_sessions = {}
 antigravity_locks = defaultdict(asyncio.Lock)
+speech_gate = asyncio.Semaphore(2)
+speech_catalogue = []
+speech_catalogue_at = 0.0
+speech_audio_cache = {}
+PREFERRED_EDGE_VOICE = "en-US-BrianMultilingualNeural"
+MAX_SPEECH_TEXT = 1800
+MAX_SPEECH_AUDIO = 1_500_000
 UI_TOOLS = [
     {"type": "function", "name": "set_theme", "description": "Set the chat theme to light, dark, or system.", "parameters": {"type": "object", "properties": {"theme": {"type": "string", "enum": ["system", "light", "dark"]}}, "required": ["theme"]}},
     {"type": "function", "name": "set_font_scale", "description": "Set chat text size from 0.85 (smaller) to 1.3 (larger), where 1 is the default.", "parameters": {"type": "object", "properties": {"scale": {"type": "number", "minimum": 0.85, "maximum": 1.3}}, "required": ["scale"]}},
@@ -118,16 +126,83 @@ def count_model_request(session_key):
 
 
 def request_identity(request):
-    auth = request.headers.get("Authorization", "")
-    bearer = auth[7:] if auth.startswith("Bearer ") else ""
-    if not valid_token(bearer):
-        raise web.HTTPUnauthorized(text='{"error":"Your session expired. Enter the code again."}', content_type="application/json")
+    session_key = authenticated_session(request)
     raw_conversation_id = request.headers.get("X-Conversation-ID", "")
     try:
         conversation_id = str(uuid.UUID(raw_conversation_id))
     except (ValueError, AttributeError):
         raise web.HTTPBadRequest(text='{"error":"A valid conversation ID is required."}', content_type="application/json")
-    return hashlib.sha256(bearer.encode()).hexdigest(), conversation_id
+    return session_key, conversation_id
+
+
+def authenticated_session(request):
+    auth = request.headers.get("Authorization", "")
+    bearer = auth[7:] if auth.startswith("Bearer ") else ""
+    if not valid_token(bearer):
+        raise web.HTTPUnauthorized(text='{"error":"Your session expired. Enter the code again."}', content_type="application/json")
+    return hashlib.sha256(bearer.encode()).hexdigest()
+
+
+async def speech_voices_route(request):
+    global speech_catalogue, speech_catalogue_at
+    authenticated_session(request)
+    now = time.monotonic()
+    if not speech_catalogue or now - speech_catalogue_at > 600:
+        try:
+            import edge_tts
+            async with asyncio.timeout(15):
+                entries = await edge_tts.list_voices()
+            speech_catalogue = [entry for entry in entries if
+                entry.get("ShortName") == PREFERRED_EDGE_VOICE and entry.get("Locale") == "en-US"]
+            speech_catalogue_at = now
+        except Exception:
+            raise web.HTTPBadGateway(text='{"error":"The speech voice catalogue is unavailable."}', content_type="application/json")
+    return web.json_response({
+        "voices": [{"name": entry["ShortName"], "friendlyName": entry.get("FriendlyName", ""), "locale": entry["Locale"]}
+                   for entry in speech_catalogue],
+        "preferredVoiceAvailable": bool(speech_catalogue),
+    }, headers={"Cache-Control": "no-store"})
+
+
+async def speech_route(request):
+    user_key = authenticated_session(request)
+    data = await read_json(request)
+    if not isinstance(data, dict):
+        raise web.HTTPBadRequest(text='{"error":"Invalid speech request."}', content_type="application/json")
+    text_value, voice = data.get("text"), data.get("voice")
+    rate = data.get("rate", 1)
+    if (not isinstance(text_value, str) or not text_value.strip() or len(text_value) > MAX_SPEECH_TEXT or
+            voice != PREFERRED_EDGE_VOICE or isinstance(rate, bool) or not isinstance(rate, (int, float)) or
+            not 0.75 <= rate <= 1.25):
+        raise web.HTTPBadRequest(text='{"error":"Invalid speech text, voice, or rate."}', content_type="application/json")
+    speech_usage_key = (user_key, "speech")
+    rate_check(speech_usage, speech_usage_key, 60, 3600)
+    cache_key = (text_value, voice, float(rate))
+    audio = speech_audio_cache.get(cache_key)
+    if audio is None:
+        if not speech_catalogue or not any(entry.get("ShortName") == voice for entry in speech_catalogue):
+            raise web.HTTPServiceUnavailable(text='{"error":"Connect to the speech service before playback."}', content_type="application/json")
+        try:
+            import edge_tts
+            async with speech_gate:
+                async with asyncio.timeout(25):
+                    audio_bytes = bytearray()
+                    communicate = edge_tts.Communicate(text_value, voice,
+                        rate=f"{round((rate - 1) * 100):+d}%")
+                    async for chunk in communicate.stream():
+                        if chunk["type"] == "audio":
+                            audio_bytes.extend(chunk["data"])
+                            if len(audio_bytes) > MAX_SPEECH_AUDIO:
+                                raise ValueError("Speech audio exceeded the response size limit.")
+            if not audio_bytes:
+                raise ValueError("Speech service returned no audio.")
+            audio = bytes(audio_bytes)
+            speech_audio_cache[cache_key] = audio
+            while len(speech_audio_cache) > 16:
+                speech_audio_cache.pop(next(iter(speech_audio_cache)))
+        except Exception:
+            raise web.HTTPBadGateway(text='{"error":"Speech synthesis failed. Try browser speech or retry."}', content_type="application/json")
+    return web.Response(body=audio, content_type="audio/mpeg", headers={"Cache-Control": "private, no-store"})
 
 
 async def read_json(request):
@@ -154,6 +229,10 @@ async def health(request):
     provider = os.getenv("CHAT_PROVIDER", "antigravity").strip().lower()
     configured = provider == "mock" or (provider in ("google", "gemini") and bool(os.getenv("GOOGLE_API_KEY") and os.getenv("GOOGLE_MODEL"))) or (provider == "antigravity" and bool(os.getenv("GOOGLE_API_KEY")))
     return web.json_response({"ok": True, "provider": provider, "providerConfigured": configured})
+
+
+async def options_route(request):
+    return web.Response(status=204)
 
 
 def get_messages(data):
@@ -520,7 +599,9 @@ def create_app():
     app.router.add_post("/api/session", session_route)
     app.router.add_post("/api/chat", chat_route)
     app.router.add_post("/api/ui-tool-result", ui_tool_result_route)
-    app.router.add_route("OPTIONS", "/{tail:.*}", lambda request: web.Response(status=204))
+    app.router.add_get("/api/voices", speech_voices_route)
+    app.router.add_post("/api/speech", speech_route)
+    app.router.add_route("OPTIONS", "/{tail:.*}", options_route)
     return app
 
 

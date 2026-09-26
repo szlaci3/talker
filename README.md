@@ -29,8 +29,12 @@ The live test refuses non-local API URLs, checks health/provider configuration, 
 
 The assistant can change the theme, text size, or one named chat color (page/header/message/input backgrounds, main/secondary/input text, and accent) from natural-language requests. Color values are validated hex colors; text colors are adjusted for contrast. Changes persist in this browser and can be reset from the Colors control. The assistant cannot generate or execute CSS/JavaScript. The browser registers these same actions with WebMCP when that API is available; otherwise the page shows an availability notice and chat remains usable. Native WebMCP invocation still needs verification in a supported browser/agent.
 
+## Speech output
+
+Completed assistant answers have Play, Pause/Resume, and Stop controls. The frontend warms the authenticated speech service in the background and uses Microsoft Brian (`en-US-BrianMultilingualNeural`) when available. While Render starts or if synthesis fails, playback uses browser Daniel when available, otherwise the browser's default voice. One upcoming segment is prefetched; voice changes happen at a segment boundary. Speech text is sent from the backend to Microsoft's Edge TTS service. Speech output is implemented locally and needs a deployed browser playback check. The live catalogue and a generic sample were verified locally; no browser playback claim is made yet.
+
 ## Hosting
 
 `frontend/netlify.toml` configures the static frontend and `render.yaml` describes the Python API. Set secrets in the hosting dashboards, set the deployed Netlify origin in `ALLOWED_ORIGINS`, and set `VITE_API_URL` to the Render API URL at frontend build time. Netlify and Render are deployed; the user reports production chat and cancellation recovery working.
 
-The current entry-attempt and chat caps live in process memory. They reset on service restarts and are not public quota enforcement; add durable/platform limits before sharing publicly. The typed chat and bounded conversational appearance controls are implemented; voice and conversation persistence are not.
+The current entry-attempt, chat caps, speech cache, and speech request caps live in process memory and reset on service restarts. They are not durable quota enforcement. Typed chat, bounded conversational appearance controls, and local speech output are implemented; hands-free speech input and conversation persistence are not.

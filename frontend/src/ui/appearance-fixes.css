@@ -7,3 +7,27 @@
     background: var(--ui-composer-bg);
   }
 }
+
+.speech-controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+  font-size: .8rem;
+}
+
+.speech-controls button,
+.speech-service button {
+  border: 1px solid #8886;
+  border-radius: 7px;
+  padding: 4px 9px;
+  background: transparent;
+  color: inherit;
+}
+
+.speech-controls [role=status],
+.speech-service {
+  color: var(--ui-muted-text);
+  font-size: .75rem;
+}

@@ -2,6 +2,7 @@ import { FormEvent, useCallback, useEffect, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { accessibleTextColor, COLOR_CSS_VARIABLES, COLOR_TARGETS, ColorPreferences, ColorTarget, contrastRatio, DEFAULT_COLORS, initialScale, initialTheme, parseColor, readSavedColors, Theme, UI_TOOL_DECLARATIONS, UiAction, validateUiAction } from './uiTools';
+import { SpeechOutput, SpeechSnapshot } from './speechOutput';
 
 type Message = {
   id: string;
@@ -60,8 +61,20 @@ export default function App() {
   const [colorOverrides, setColorOverrides] = useState(readSavedColors);
   const [colorTarget, setColorTarget] = useState<ColorTarget>('pageBackground');
   const [colorChoice, setColorChoice] = useState('#f7f7f5');
+  const [speech, setSpeech] = useState<SpeechSnapshot>({ messageId: null, phase: 'idle', service: 'idle', detail: '' });
+  const speechOutput = useRef<SpeechOutput | null>(null);
   const abort = useRef<AbortController | null>(null);
   const tail = useRef<HTMLDivElement>(null);
+
+  if (!speechOutput.current) {
+    speechOutput.current = new SpeechOutput(API, () => sessionStorage.getItem('chat-token') || '', setSpeech);
+  }
+
+  useEffect(() => {
+    if (token) void speechOutput.current?.warmup();
+    else speechOutput.current?.stop();
+  }, [token]);
+  useEffect(() => () => speechOutput.current?.dispose(), []);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -352,6 +365,15 @@ export default function App() {
             {m.role === 'assistant' && m.content
               ? <ReactMarkdown remarkPlugins={[remarkGfm]} skipHtml>{m.content}</ReactMarkdown>
               : m.content || (m.status === 'pending' ? <span className="typing">Thinking<span>…</span></span> : '')}
+            {m.role === 'assistant' && m.status === 'complete' && m.content.trim() && <div className="speech-controls">
+              <button type="button" onClick={() => speechOutput.current?.toggle(m.id, m.content)}>
+                {speech.messageId === m.id && speech.phase === 'paused' ? 'Resume'
+                  : speech.messageId === m.id && ['loading', 'speaking-edge', 'speaking-browser'].includes(speech.phase) ? 'Pause'
+                    : 'Play'}
+              </button>
+              {speech.messageId === m.id && ['loading', 'speaking-edge', 'speaking-browser', 'paused'].includes(speech.phase) && <button type="button" onClick={() => speechOutput.current?.stop()}>Stop</button>}
+              {speech.messageId === m.id && speech.detail && <span role="status">{speech.detail}</span>}
+            </div>}
             {m.status === 'canceled' && <span className="turn-status">Canceled before a response</span>}
             {m.role === 'assistant' && m.status === 'interrupted' && <span className="turn-status">Stopped</span>}
           </div>
@@ -361,6 +383,9 @@ export default function App() {
     </section>
     <footer>
       <p className="notice">{webmcp}</p>
+      {speech.service === 'connecting' && <p className="speech-service" role="status">Speech service is waking. Play uses browser speech until Brian is ready.</p>}
+      {speech.service === 'unavailable' && <p className="speech-service" role="status">{speech.detail} <button type="button" onClick={() => void speechOutput.current?.warmup()}>Reconnect</button></p>}
+      {speech.service === 'ready' && <p className="speech-service" role="status">Brian voice is ready.</p>}
       {error && <p className="error">{error}</p>}
       <form className="composer" onSubmit={send}>
         <textarea aria-label="Message" placeholder="Message the assistant…" value={input} maxLength={12000}
