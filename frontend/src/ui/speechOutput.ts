@@ -104,6 +104,24 @@ export class SpeechOutput {
     return this.voiceStatusPromise;
   }
 
+  async reconnect() {
+    if (this.disposed || !this.getToken()) return;
+    if (this.voiceStatusPromise) await this.voiceStatusPromise;
+    this.voiceReady = false;
+    this.edgeFailed = false;
+    this.voiceStatusPromise = null;
+    this.update({ service: 'connecting', detail: 'Checking Brian voice and audio generation. Browser speech remains available.' });
+    await this.warmup();
+    if (!this.voiceReady || this.disposed) return;
+    const result = await this.requestAudio('This is a speech service connection test.');
+    if (result.error || !result.blob) {
+      this.voiceReady = false;
+      this.update({ service: 'unavailable', detail: `Brian voice was found, but audio generation failed${result.error instanceof Error ? ` (${result.error.message})` : ''}. Browser speech remains available; press Reconnect to retry.` });
+      return;
+    }
+    this.update({ service: 'ready', detail: 'Brian voice and audio generation are ready.' });
+  }
+
   private async loadVoices() {
     for (let attempt = 0; attempt < 6 && !this.disposed; attempt++) {
       const controller = new AbortController();
@@ -193,7 +211,8 @@ export class SpeechOutput {
       if (result.error || !result.blob) {
         this.edgeFailed = true;
         this.clearAudioSource();
-        this.update({ service: 'unavailable', phase: 'speaking-browser', detail: 'Brian audio failed. Continuing with the available browser voice.' });
+        this.voiceReady = false;
+        this.update({ service: 'unavailable', phase: 'speaking-browser', detail: `Brian audio failed${result.error instanceof Error ? ` (${result.error.message})` : ''}. Continuing with the available browser voice.` });
         this.playBrowserPart(generation);
         return;
       }
@@ -262,7 +281,8 @@ export class SpeechOutput {
     this.engine = 'browser';
     const browserName = daniel?.name || 'browser default (Daniel unavailable)';
     const extra = this.voiceReady ? 'Brian will take over at the next sentence.' : 'Brian is waking; this sentence will use browser speech.';
-    this.update({ phase: 'speaking-browser', detail: `Using ${browserName}. ${extra}` });
+    const failure = this.state.service === 'unavailable' ? `${this.state.detail} ` : '';
+    this.update({ phase: 'speaking-browser', detail: `${failure}Using ${browserName}. ${extra}` });
     this.synth.speak(utterance);
   }
 
@@ -278,7 +298,14 @@ export class SpeechOutput {
           body: JSON.stringify({ text, voice: PREFERRED_VOICE, rate: 1 }),
         });
         if (response.status === 502 && attempt === 0) continue;
-        if (!response.ok) return { error: new Error(`Speech request failed (${response.status}).`) };
+        if (!response.ok) {
+          let reason = '';
+          try {
+            const body = await response.json() as { error?: unknown };
+            if (typeof body.error === 'string') reason = `: ${body.error.slice(0, 180)}`;
+          } catch { /* the response may be plain text or empty */ }
+          return { error: new Error(`HTTP ${response.status}${reason}`) };
+        }
         return { blob: await response.blob() };
       } catch (error) {
         if (controller.signal.aborted && this.state.phase === 'paused') return { error };

@@ -384,7 +384,7 @@ export default function App() {
     <footer>
       <p className="notice">{webmcp}</p>
       {speech.service === 'connecting' && <p className="speech-service" role="status">Speech service is waking. Play uses browser speech until Brian is ready.</p>}
-      {speech.service === 'unavailable' && <p className="speech-service" role="status">{speech.detail} <button type="button" onClick={() => void speechOutput.current?.warmup()}>Reconnect</button></p>}
+        {speech.service === 'unavailable' && <p className="speech-service" role="status">{speech.detail} <button type="button" onClick={() => void speechOutput.current?.reconnect()}>Reconnect</button></p>}
       {speech.service === 'ready' && <p className="speech-service" role="status">Brian voice is ready.</p>}
       {error && <p className="error">{error}</p>}
       <form className="composer" onSubmit={send}>

@@ -21,6 +21,45 @@ describe('speech output', () => {
     expect(preferredVoice([brian])).toEqual(brian);
   });
 
+  it('reconnect checks both the catalogue and actual audio generation', async () => {
+    const requests: Array<{ url: string; body?: string }> = [];
+    const fetcher = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      requests.push({ url, body: init?.body as string | undefined });
+      if (url.endsWith('/api/voices')) return new Response(JSON.stringify({ voices: [brian] }), { status: 200 });
+      return new Response(new Blob(['mp3']), { status: 200 });
+    }) as typeof fetch;
+    const audio = { src: '', play: vi.fn(async () => {}), pause: vi.fn(), removeAttribute: vi.fn(), load: vi.fn() } as unknown as HTMLAudioElement;
+    const output = new SpeechOutput('/api', () => 'session-token', vi.fn(), { fetcher, synth: null, makeAudio: () => audio });
+
+    await output.warmup();
+    expect(output.snapshot().service).toBe('ready');
+    await output.reconnect();
+
+    expect(requests.filter(request => request.url.endsWith('/api/voices'))).toHaveLength(2);
+    const probe = requests.find(request => request.url.endsWith('/api/speech'));
+    expect(JSON.parse(probe?.body || '{}').text).toBe('This is a speech service connection test.');
+    expect(output.snapshot().service).toBe('ready');
+    output.dispose();
+  });
+
+  it('shows an HTTP synthesis failure and marks Brian unavailable', async () => {
+    const fetcher = (async (input: RequestInfo | URL) => String(input).endsWith('/api/voices')
+      ? new Response(JSON.stringify({ voices: [brian] }), { status: 200 })
+      : new Response(JSON.stringify({ error: 'Speech synthesis failed.' }), { status: 502 })) as typeof fetch;
+    const audio = { src: '', play: vi.fn(async () => {}), pause: vi.fn(), removeAttribute: vi.fn(), load: vi.fn() } as unknown as HTMLAudioElement;
+    const synth = { getVoices: () => [], speak: vi.fn(), pause: vi.fn(), resume: vi.fn(), cancel: vi.fn() } as unknown as SpeechSynthesis;
+    const output = new SpeechOutput('/api', () => 'session-token', vi.fn(), {
+      fetcher, synth, makeAudio: () => audio,
+      makeUtterance: text => ({ text, onend: null, onerror: null } as unknown as SpeechSynthesisUtterance),
+    });
+    await output.warmup();
+    output.play('answer-failed', 'A short answer.');
+    await waitFor(() => expect(output.snapshot().service).toBe('unavailable'));
+    expect(output.snapshot().detail).toContain('HTTP 502: Speech synthesis failed.');
+    output.dispose();
+  });
+
   it('starts with Daniel during service warm-up, then switches at the exact unread segment', async () => {
     let finishCatalogue!: (response: Response) => void;
     let activeUtterance: SpeechSynthesisUtterance | undefined;
