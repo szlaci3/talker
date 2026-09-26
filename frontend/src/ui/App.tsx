@@ -190,7 +190,7 @@ export default function App() {
           <button key={s} onClick={() => send(undefined, s)}>{s}<span>↗</span></button>
         )}</div>
       </div> : messages.map(m =>
-        <article className={'message ' + m.role} key={m.id}>
+        <article className={'message ' + m.role + (m.status === 'canceled' || m.status === 'interrupted' ? ' stale' : '')} key={m.id}>
           <div className="avatar">{m.role === 'user' ? 'Y' : '✳'}</div>
           <div className="content">
             {m.role === 'assistant' && m.content
