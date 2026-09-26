@@ -13,8 +13,20 @@ For a deployed backend, configure these values in the hosting provider environme
 
 Set `VITE_API_URL` before building the frontend when the API is hosted somewhere other than `http://localhost:8080`. Configure the API's `ALLOWED_ORIGINS` to the exact frontend origin(s).
 
+## Tests
+
+Run `npm test` in `frontend/` for deterministic Vitest/React Testing Library UI tests. These tests use controlled response streams and make no model API calls.
+
+For one real Antigravity smoke test, start the local backend with `CHAT_PROVIDER=antigravity` and a valid `GOOGLE_API_KEY` in `backend/.env`, then run `npm run test:live` in `frontend/` with these environment variables set in the same shell:
+
+- `TALKER_ENABLE_ANTIGRAVITY_LIVE=1`
+- `TALKER_LIVE_INVITATION_CODE` set to the local invitation code
+- `VITE_API_URL=http://127.0.0.1:8080`
+
+The live test refuses non-local API URLs, checks health/provider configuration, and submits one short chat prompt through the rendered UI. A shared local rate limiter caps Antigravity chat calls at 7 per rolling 60 seconds. The Google API key stays in the backend environment and is never read by the frontend test. Live calls count against the configured account's usage.
+
 ## Hosting
 
-`frontend/netlify.toml` configures the static frontend and `render.yaml` describes the Python API. Set secrets in the hosting dashboards, set the deployed Netlify origin in `ALLOWED_ORIGINS`, and set `VITE_API_URL` to the Render API URL at frontend build time. No service has been deployed or live-tested.
+`frontend/netlify.toml` configures the static frontend and `render.yaml` describes the Python API. Set secrets in the hosting dashboards, set the deployed Netlify origin in `ALLOWED_ORIGINS`, and set `VITE_API_URL` to the Render API URL at frontend build time. Netlify and Render are deployed; the user reports production chat and cancellation recovery working.
 
 The current entry-attempt and chat caps live in process memory. They reset on service restarts and are not public quota enforcement; add durable/platform limits before sharing publicly. This milestone does not implement WebMCP, model-driven UI actions, voice, or conversation persistence.

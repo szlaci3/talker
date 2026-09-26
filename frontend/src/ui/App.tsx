@@ -96,7 +96,8 @@ export default function App() {
           'X-Conversation-ID': conversationId.current,
         },
         body: JSON.stringify({
-          messages: [...completedTurns(messages), { role: 'user', content: body }],
+          messages: [...completedTurns(messages), { role: 'user', content: body }]
+            .map(({ role, content }) => ({ role, content })),
         }),
         signal: ctl.signal,
       });
