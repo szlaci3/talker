@@ -41,7 +41,8 @@ export function speechSegments(text: string, limit = MAX_SEGMENT_LENGTH): string
   return segments;
 }
 
-type RequestResult = { blob?: Blob; error?: unknown };
+type RequestResult = { blob?: Blob; error?: unknown; retryable?: boolean };
+const transientStatus = (status: number) => status === 408 || status >= 500;
 type Dependencies = {
   fetcher?: typeof fetch;
   synth?: SpeechSynthesis | null;
@@ -77,6 +78,12 @@ export class SpeechOutput {
   private engine: 'edge' | 'browser' | null = null;
   private readonly browserLeadSegments = 3;
   private startWithBrian = false;
+  private hasRetriedConnection = false;
+  private retryConnectionPending = false;
+  private reconnectPromise: Promise<void> | null = null;
+  private connectionGeneration = 0;
+  private connectionRetryable = false;
+  private partRequestId = 0;
 
   constructor(
     private api: string,
@@ -100,33 +107,87 @@ export class SpeechOutput {
   }
 
   warmup() {
+    if (this.reconnectPromise) return this.reconnectPromise;
     if (this.disposed || this.voiceStatusPromise || this.voiceReady || !this.getToken()) return this.voiceStatusPromise;
+    const connection = this.connectionGeneration;
     this.update({ service: 'connecting', detail: 'Waking the speech service. Browser speech is available while it starts.' });
-    this.voiceStatusPromise = this.loadVoices().finally(() => { this.voiceStatusPromise = null; });
-    return this.voiceStatusPromise;
+    const promise = this.loadVoices(connection).then(found => {
+      if (connection !== this.connectionGeneration || !found) return;
+      this.voiceReady = true;
+      this.update({ service: 'ready', detail: 'Brian voice is ready.' });
+      this.prepareHandoff(this.generation);
+    }).finally(() => {
+      if (this.voiceStatusPromise !== promise) return;
+      this.voiceStatusPromise = null;
+      if (!this.voiceReady && this.connectionRetryable) this.scheduleReconnect();
+    });
+    this.voiceStatusPromise = promise;
+    return promise;
   }
 
-  async reconnect() {
-    if (this.disposed || !this.getToken()) return;
-    if (this.voiceStatusPromise) await this.voiceStatusPromise;
+  reconnect(): Promise<void> {
+    if (this.disposed || !this.getToken()) return Promise.resolve();
+    this.hasRetriedConnection = true;
+    this.retryConnectionPending = false;
+    if (this.reconnectPromise) return this.reconnectPromise;
+    const promise = this.runReconnect(this.connectionGeneration).finally(() => {
+      if (this.reconnectPromise === promise) this.reconnectPromise = null;
+    });
+    this.reconnectPromise = promise;
+    return promise;
+  }
+
+  private async runReconnect(connection: number) {
+    await this.voiceStatusPromise;
+    if (connection !== this.connectionGeneration) return;
     this.voiceReady = false;
-    this.edgeFailed = false;
-    this.voiceStatusPromise = null;
+    this.edgeFailed = true;
+    this.prepared = null;
     this.update({ service: 'connecting', detail: 'Checking Brian voice and audio generation. Browser speech remains available.' });
-    await this.warmup();
-    if (!this.voiceReady || this.disposed) return;
+    const found = await this.loadVoices(connection);
+    if (connection !== this.connectionGeneration || !found) return;
     const result = await this.requestAudio('This is a speech service connection test.');
+    if (connection !== this.connectionGeneration) return;
     if (result.error || !result.blob) {
-      this.voiceReady = false;
       this.update({ service: 'unavailable', detail: `Brian voice was found, but audio generation failed${result.error instanceof Error ? ` (${result.error.message})` : ''}. Browser speech remains available; press Reconnect to retry.` });
       return;
     }
+    this.voiceReady = true;
+    this.edgeFailed = false;
     this.update({ service: 'ready', detail: 'Brian voice and audio generation are ready.' });
+    this.prepareHandoff(this.generation);
   }
 
-  private async loadVoices() {
+  private playbackActive() {
+    return !this.disposed && this.state.messageId !== null && !['idle', 'ended', 'error'].includes(this.state.phase);
+  }
+
+  private scheduleReconnect() {
+    if (!this.playbackActive() || this.hasRetriedConnection) return;
+    this.retryConnectionPending = true;
+    this.maybeReconnect();
+  }
+
+  private maybeReconnect() {
+    if (this.retryConnectionPending && this.playbackActive() && !this.paused && !this.hasRetriedConnection) {
+      void this.reconnect();
+    }
+  }
+
+  private cancelConnection() {
+    this.connectionGeneration++;
+    this.voiceControllers.forEach(controller => controller.abort());
+    this.voiceControllers.clear();
+    this.voiceStatusPromise = null;
+    this.reconnectPromise = null;
+    this.retryConnectionPending = false;
+    if (!this.voiceReady && this.state.service === 'connecting') this.update({ service: 'idle' });
+  }
+
+  private async loadVoices(connection: number): Promise<boolean> {
     let lastFailure = 'no response';
-    for (let attempt = 0; attempt < 6 && !this.disposed; attempt++) {
+    this.connectionRetryable = false;
+    for (let attempt = 0; attempt < 6 && connection === this.connectionGeneration; attempt++) {
       const controller = new AbortController();
       this.voiceControllers.add(controller);
       const timeout = window.setTimeout(() => controller.abort(), 12_000);
@@ -134,27 +195,28 @@ export class SpeechOutput {
         const response = await this.fetcher(this.api + '/api/voices', {
           headers: { Authorization: 'Bearer ' + this.getToken() }, signal: controller.signal,
         });
+        if (connection !== this.connectionGeneration) return false;
         if (response.ok) {
           const result = await response.json() as { voices?: VoiceEntry[] };
+          if (connection !== this.connectionGeneration) return false;
           if (Array.isArray(result.voices) && preferredVoice(result.voices)) {
-            this.voiceReady = true;
-            this.update({ service: 'ready', detail: 'Brian voice is ready.' });
-            this.prepareHandoff(this.generation);
-            return;
+            return true;
           }
           this.update({ service: 'unavailable', detail: 'Brian is not available from the speech service. Browser speech remains available.' });
-          return;
+          return false;
         }
         lastFailure = `HTTP ${response.status}`;
         try {
           const body = await response.json() as { error?: unknown };
           if (typeof body.error === 'string') lastFailure += `: ${body.error.slice(0, 140)}`;
         } catch { /* status is still useful when the server has no JSON error body */ }
-        if ([400, 401, 403, 404].includes(response.status)) {
+        if (connection !== this.connectionGeneration) return false;
+        if (!transientStatus(response.status)) {
           this.update({ service: 'unavailable', detail: `Brian voice catalogue request failed (${lastFailure}). Check the speech backend deployment and API URL. Browser speech remains available.` });
-          return;
+          return false;
         }
       } catch (error) {
+        if (connection !== this.connectionGeneration) return false;
         lastFailure = controller.signal.aborted
           ? 'request timed out'
           : error instanceof Error ? error.message.slice(0, 140) : 'network request failed';
@@ -163,9 +225,21 @@ export class SpeechOutput {
         window.clearTimeout(timeout);
         this.voiceControllers.delete(controller);
       }
-      if (attempt < 5 && !this.disposed) await new Promise(resolve => window.setTimeout(resolve, 3000));
+      if (attempt < 5 && connection === this.connectionGeneration) {
+        const delay = new AbortController();
+        this.voiceControllers.add(delay);
+        await new Promise<void>(resolve => {
+          const timer = window.setTimeout(resolve, 3000);
+          delay.signal.addEventListener('abort', () => { window.clearTimeout(timer); resolve(); }, { once: true });
+        });
+        this.voiceControllers.delete(delay);
+      }
     }
-    if (!this.disposed) this.update({ service: 'unavailable', detail: `Brian voice catalogue could not be reached after 6 attempts (last result: ${lastFailure}). Check the speech backend deployment and API URL. Browser speech remains available; press Reconnect to retry.` });
+    if (connection === this.connectionGeneration) {
+      this.connectionRetryable = true;
+      this.update({ service: 'unavailable', detail: `Brian voice catalogue could not be reached after 6 attempts (last result: ${lastFailure}). Check the speech backend deployment and API URL. Browser speech remains available; press Reconnect to retry.` });
+    }
+    return false;
   }
 
   unlock() {
@@ -184,6 +258,7 @@ export class SpeechOutput {
 
   play(messageId: string, markdown: string) {
     this.stop(false);
+    this.hasRetriedConnection = false;
     this.startWithBrian = this.voiceReady;
     const visibleText = speechText(markdown);
     this.textParts = speechSegments(visibleText);
@@ -211,32 +286,38 @@ export class SpeechOutput {
 
   private async playPart(generation: number) {
     if (generation !== this.generation || this.paused) return;
+    const requestId = ++this.partRequestId;
     if (this.part >= this.textParts.length) {
+      this.generation++;
+      this.cancelConnection();
+      this.controllers.forEach(controller => controller.abort());
+      this.controllers.clear();
       this.update({ phase: 'ended', detail: 'Finished.' });
       this.engine = null;
       return;
     }
-    if (!this.startWithBrian && this.part < this.browserLeadSegments) {
+    if ((!this.startWithBrian && this.part < this.browserLeadSegments) || (this.prepared && this.prepared.index > this.part)) {
       this.playBrowserPart(generation);
       return;
     }
-    if (!this.voiceReady && this.state.service === 'connecting' && this.voiceStatusPromise) {
+    if (!this.voiceReady && this.state.service === 'connecting' && this.voiceStatusPromise && !this.reconnectPromise) {
       this.update({ phase: 'loading', detail: 'Preparing Brian audio…' });
       await this.voiceStatusPromise;
-      if (generation !== this.generation || this.paused) return;
+      if (generation !== this.generation || this.paused || requestId !== this.partRequestId) return;
     }
     if (this.voiceReady && !this.edgeFailed) {
       this.engine = 'edge';
       this.update({ phase: 'loading', detail: 'Preparing Brian audio…' });
       const result = this.prepared?.index === this.part ? await this.prepared.result : await this.requestAudio(this.textParts[this.part]);
+      if (generation !== this.generation || this.paused || requestId !== this.partRequestId) return;
       this.prepared = null;
-      if (generation !== this.generation || this.paused) return;
       if (result.error || !result.blob) {
         this.edgeFailed = true;
         this.clearAudioSource();
         this.voiceReady = false;
         this.update({ service: 'unavailable', phase: 'speaking-browser', detail: `Brian audio failed${result.error instanceof Error ? ` (${result.error.message})` : ''}. Continuing with the available browser voice.` });
         this.playBrowserPart(generation);
+        if (result.retryable) this.scheduleReconnect();
         return;
       }
       this.playEdgeBlob(result.blob, generation);
@@ -292,6 +373,8 @@ export class SpeechOutput {
     utterance.lang = daniel?.lang || 'en-GB';
     utterance.onend = () => {
       if (generation !== this.generation) return;
+      this.utterance = null;
+      this.engine = null;
       this.part++;
       void this.playPart(generation);
     };
@@ -303,7 +386,8 @@ export class SpeechOutput {
     this.edgeAudioReady = false;
     this.engine = 'browser';
     const browserName = daniel?.name || 'browser default (Daniel unavailable)';
-    const extra = this.voiceReady ? 'Brian will take over at the next sentence.' : 'Brian is waking; this sentence will use browser speech.';
+    const extra = this.voiceReady && !this.edgeFailed ? 'Brian will take over at an upcoming segment.'
+      : this.state.service === 'connecting' ? 'Brian is connecting; browser speech continues.' : 'Browser speech continues.';
     const failure = this.state.service === 'unavailable' ? `${this.state.detail} ` : '';
     this.update({ phase: 'speaking-browser', detail: `${failure}Using ${browserName}. ${extra}` });
     this.synth.speak(utterance);
@@ -315,13 +399,15 @@ export class SpeechOutput {
       this.browserLeadSegments,
       this.part + (this.engine === 'browser' ? 1 : 0),
     );
-    if (generation !== this.generation || this.disposed || !this.voiceReady || this.edgeFailed
+    if (generation !== this.generation || !this.playbackActive() || !this.voiceReady || this.edgeFailed
       || this.textParts.length <= handoffPart || this.prepared) return;
     this.prepared = { index: handoffPart, result: this.requestAudio(this.textParts[handoffPart]) };
   }
 
   private async requestAudio(text: string): Promise<RequestResult> {
+    const generation = this.generation;
     for (let attempt = 0; attempt < 2; attempt++) {
+      if (generation !== this.generation || this.disposed) return { error: new Error('Speech request cancelled.') };
       const controller = new AbortController();
       this.controllers.add(controller);
       const timeout = window.setTimeout(() => controller.abort(), 30_000);
@@ -338,12 +424,13 @@ export class SpeechOutput {
             const body = await response.json() as { error?: unknown };
             if (typeof body.error === 'string') reason = `: ${body.error.slice(0, 180)}`;
           } catch { /* the response may be plain text or empty */ }
-          return { error: new Error(`HTTP ${response.status}${reason}`) };
+          return { error: new Error(`HTTP ${response.status}${reason}`), retryable: transientStatus(response.status) };
         }
         return { blob: await response.blob() };
       } catch (error) {
+        if (generation !== this.generation || (controller.signal.aborted && !this.controllers.has(controller))) return { error };
         if (controller.signal.aborted && this.state.phase === 'paused') return { error };
-        if (attempt === 1) return { error };
+        if (attempt === 1) return { error, retryable: true };
       } finally {
         window.clearTimeout(timeout);
         this.controllers.delete(controller);
@@ -373,6 +460,7 @@ export class SpeechOutput {
     if (this.engine === 'edge') this.audio?.pause();
     if (this.engine === 'browser') this.synth?.pause();
     if (this.state.phase === 'loading') {
+      this.partRequestId++;
       this.controllers.forEach(controller => controller.abort());
       this.prepared = null;
       this.engine = null;
@@ -383,6 +471,7 @@ export class SpeechOutput {
   resume() {
     if (!this.paused) return;
     this.paused = false;
+    this.maybeReconnect();
     if (this.engine === 'edge' && this.edgeAudioReady && this.audio?.src) {
       void this.audio.play().then(() => this.update({ phase: 'speaking-edge', detail: 'Speaking with Brian.' })).catch(() => {
         this.engine = null;
@@ -400,6 +489,7 @@ export class SpeechOutput {
 
   stop(publish = true) {
     this.generation++;
+    this.cancelConnection();
     this.paused = false;
     this.controllers.forEach(controller => controller.abort());
     this.controllers.clear();
