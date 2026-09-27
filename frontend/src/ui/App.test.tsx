@@ -108,6 +108,38 @@ describe('chat cancellation and recovery', () => {
       { role: 'user', content: 'What were the consequences?' },
     ]);
   });
+
+  it('asks for the invitation code on composer focus when the stored session expired', async () => {
+    fetchMock.mockResolvedValueOnce(new Response('{}', { status: 401 }));
+    const user = userEvent.setup();
+    render(<App />);
+    const textbox = screen.getByRole('textbox', { name: 'Message' });
+    await user.type(textbox, 'Test 3 Q1');
+
+    expect(await screen.findByRole('textbox', { name: 'Invitation code' })).toBeInTheDocument();
+    expect(sessionStorage.getItem('chat-token')).toBeNull();
+    expect(screen.queryByText('Test 3 Q1')).not.toBeInTheDocument();
+
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ token: 'renewed-token' }), { status: 200 }));
+    await user.type(screen.getByRole('textbox', { name: 'Invitation code' }), 'valid-invitation-code');
+    await user.click(screen.getByRole('button', { name: /Continue/ }));
+
+    expect(await screen.findByRole('textbox', { name: 'Message' })).toHaveValue('Test 3 Q1');
+  });
+
+  it('restores the unsent draft when the session expires during submission', async () => {
+    fetchMock.mockResolvedValueOnce(new Response('{}', { status: 200 }));
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ error: 'Your session expired. Enter the code again.' }), { status: 401 }));
+    const user = userEvent.setup();
+    render(<App />);
+    const textbox = screen.getByRole('textbox', { name: 'Message' });
+    await user.type(textbox, 'Test 3 Q1');
+    await user.click(screen.getByRole('button', { name: '↑' }));
+
+    expect(await screen.findByRole('textbox', { name: 'Invitation code' })).toBeInTheDocument();
+    expect(screen.queryByText('Test 3 Q1')).not.toBeInTheDocument();
+    expect(sessionStorage.getItem('chat-token')).toBeNull();
+  });
 });
 
 describe('conversational appearance tools', () => {

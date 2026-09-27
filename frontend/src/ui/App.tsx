@@ -64,6 +64,7 @@ export default function App() {
   const [speech, setSpeech] = useState<SpeechSnapshot>({ messageId: null, phase: 'idle', service: 'idle', detail: '' });
   const speechOutput = useRef<SpeechOutput | null>(null);
   const abort = useRef<AbortController | null>(null);
+  const sessionCheck = useRef<Promise<void> | null>(null);
   const tail = useRef<HTMLDivElement>(null);
 
   if (!speechOutput.current) {
@@ -204,6 +205,27 @@ export default function App() {
     }
   }
 
+  async function checkSession() {
+    if (!token || sessionCheck.current) return sessionCheck.current;
+    const checkedToken = token;
+    const check = (async () => {
+      try {
+        const r = await fetch(API + '/api/session', {
+          headers: { 'Authorization': 'Bearer ' + checkedToken },
+        });
+        if (r.status === 401 && sessionStorage.getItem('chat-token') === checkedToken) {
+          sessionStorage.removeItem('chat-token');
+          setToken('');
+          setError('Your session expired. Enter the code again to continue.');
+        }
+      } catch {
+        // Keep the chat usable during a temporary connection failure.
+      }
+    })();
+    sessionCheck.current = check;
+    try { await check; } finally { if (sessionCheck.current === check) sessionCheck.current = null; }
+  }
+
   async function send(e?: FormEvent, text = input) {
     e?.preventDefault();
     const body = text.trim();
@@ -234,12 +256,13 @@ export default function App() {
         }),
         signal: ctl.signal,
       });
-      if (!r.ok) {
-        const j = await r.json().catch(() => ({}));
-        if (r.status === 401) {
-          sessionStorage.removeItem('chat-token');
-          setToken('');
-        }
+        if (!r.ok) {
+          const j = await r.json().catch(() => ({}));
+          if (r.status === 401) {
+            sessionStorage.removeItem('chat-token');
+            setToken('');
+            setInput(body);
+          }
         throw Error(j.error || 'Request failed (' + r.status + ').');
       }
       const readEvents = async (response: Response, depth = 0): Promise<void> => {
@@ -297,6 +320,7 @@ export default function App() {
       setMessages(cur => {
         const hasPartialAnswer = cur.some(m => m.id === assistantId && m.content.trim());
         return cur.flatMap(m => {
+          if ((x as Error).message === 'Your session expired. Enter the code again.' && m.id === userId) return [];
           if (m.id === userId && canceled) {
             return [{ ...m, status: hasPartialAnswer ? 'interrupted' as const : 'canceled' as const }];
           }
@@ -390,6 +414,7 @@ export default function App() {
       <form className="composer" onSubmit={send}>
         <textarea aria-label="Message" placeholder="Message the assistant…" value={input} maxLength={12000}
           onChange={e => setInput(e.target.value)}
+          onFocus={() => { void checkSession(); }}
           onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }} />
         {busy
           ? <button type="button" className="stop" onClick={() => abort.current?.abort()}>Stop</button>

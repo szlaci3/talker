@@ -225,6 +225,11 @@ async def session_route(request):
     return web.json_response({"token": token_for(int(time.time()) + SESSION_TTL), "expiresIn": SESSION_TTL})
 
 
+async def session_check_route(request):
+    authenticated_session(request)
+    return web.json_response({"ok": True}, headers={"Cache-Control": "no-store"})
+
+
 async def health(request):
     provider = os.getenv("CHAT_PROVIDER", "antigravity").strip().lower()
     configured = provider == "mock" or (provider in ("google", "gemini") and bool(os.getenv("GOOGLE_API_KEY") and os.getenv("GOOGLE_MODEL"))) or (provider == "antigravity" and bool(os.getenv("GOOGLE_API_KEY")))
@@ -597,6 +602,7 @@ def create_app():
     app = web.Application(middlewares=[security], client_max_size=MAX_BODY)
     app.router.add_get("/healthz", health)
     app.router.add_post("/api/session", session_route)
+    app.router.add_get("/api/session", session_check_route)
     app.router.add_post("/api/chat", chat_route)
     app.router.add_post("/api/ui-tool-result", ui_tool_result_route)
     app.router.add_get("/api/voices", speech_voices_route)
