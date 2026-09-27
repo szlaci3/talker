@@ -76,7 +76,7 @@ export class SpeechOutput {
   private objectUrl: string | null = null;
   private prepared: { index: number; result: Promise<RequestResult> } | null = null;
   private engine: 'edge' | 'browser' | null = null;
-  private readonly browserLeadSegments = 3;
+  private readonly browserLeadSegments = 1;
   private startWithBrian = false;
   private hasRetriedConnection = false;
   private retryConnectionPending = false;
