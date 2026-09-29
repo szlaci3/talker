@@ -172,6 +172,37 @@ describe('conversational appearance tools', () => {
     });
   });
 
+  it('routes assistant appearance calls through native WebMCP discovery and execution when available', async () => {
+    const registered: Array<Record<string, unknown>> = [];
+    const executeTool = vi.fn(async (tool: { name: string }, input: unknown) => {
+      const descriptor = registered.find(candidate => candidate.name === tool.name)!;
+      const execute = descriptor.execute as (args: unknown) => unknown;
+      return JSON.stringify(await execute(input));
+    });
+    Object.defineProperty(document, 'modelContext', { configurable: true, value: {
+      registerTool: vi.fn(async (tool: Record<string, unknown>) => { registered.push(tool); }),
+      getTools: vi.fn(async () => registered.map(tool => ({ name: String(tool.name) }))),
+      executeTool,
+    } });
+    fetchMock.mockResolvedValueOnce(eventStream({
+      tool_calls: [{ id: 'native-tool', name: 'set_theme', arguments: { theme: 'dark' } }],
+    }));
+    fetchMock.mockResolvedValueOnce(eventStream({ delta: 'Dark mode is on.' }));
+
+    try {
+      const user = userEvent.setup();
+      render(<App />);
+      await user.type(screen.getByRole('textbox', { name: 'Message' }), 'Switch to dark mode');
+      await user.click(screen.getByRole('button', { name: '↑' }));
+
+      expect(await screen.findByText('Dark mode is on.')).toBeInTheDocument();
+      expect(executeTool).toHaveBeenCalledWith({ name: 'set_theme' }, { theme: 'dark' }, expect.objectContaining({ signal: expect.any(AbortSignal) }));
+      expect(document.documentElement.dataset.theme).toBe('dark');
+    } finally {
+      delete (document as Document & { modelContext?: unknown }).modelContext;
+    }
+  });
+
   it('continues a second appearance action requested after the first tool result', async () => {
     fetchMock.mockResolvedValueOnce(eventStream({
       tool_calls: [{ id: 'tool-green', name: 'set_ui_color', arguments: { target: 'messageBackground', color: '#aaffaa' } }],
@@ -256,8 +287,8 @@ describe('conversational appearance tools', () => {
       await waitFor(() => expect(registerTool).toHaveBeenCalledTimes(5));
       expect(screen.getByText('WebMCP tools are registered. Chat remains available.')).toBeInTheDocument();
       const colorTool = registered.find(tool => tool.name === 'set_ui_color');
-      const execute = colorTool?.execute as (input: unknown) => string;
-      const result = JSON.parse(execute({ target: 'composerBackground', color: '#123456' }));
+      const execute = colorTool?.execute as (input: unknown) => { ok: boolean };
+      const result = execute({ target: 'composerBackground', color: '#123456' });
       expect(result.ok).toBe(true);
       await waitFor(() => expect(document.documentElement.style.getPropertyValue('--ui-composer-bg')).toBe('#123456'));
     } finally {

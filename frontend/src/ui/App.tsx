@@ -15,6 +15,13 @@ const API = import.meta.env.VITE_API_URL || 'http://localhost:8080';
 const suggestions = ['What can you help me with?', 'Explain a tricky idea simply', 'Help me plan a small project'];
 const WEBMCP_FALLBACK = "WebMCP isn't available in this browser. Chat and conversational UI controls remain available.";
 
+type WebMCPTool = { name: string };
+type WebMCPContext = {
+  registerTool: (tool: Record<string, unknown>, options?: { signal?: AbortSignal }) => Promise<void>;
+  getTools: () => Promise<WebMCPTool[]>;
+  executeTool: (tool: WebMCPTool, input?: unknown, options?: { signal?: AbortSignal }) => Promise<string>;
+};
+
 function preferences(theme: string, scale: number): { theme: string; fontScale: number; colors: ColorPreferences } {
   const root = document.documentElement;
   const colors = Object.fromEntries(Object.entries(COLOR_CSS_VARIABLES).map(([target, variable]) => {
@@ -157,8 +164,35 @@ export default function App() {
     return { ok: true, message: 'Updated the chat appearance.' };
   }, [theme, scale]);
 
+  const invokeUiTool = useCallback(async (name: unknown, rawInput: unknown, signal: AbortSignal) => {
+    const input = toolArguments(rawInput);
+    const action = validateUiAction(name, input);
+    if (!action || typeof name !== 'string') return { ok: false, message: 'That UI action was invalid and was not applied.' };
+
+    const modelContext = (document as Document & { modelContext?: WebMCPContext }).modelContext;
+    if (modelContext?.getTools && modelContext.executeTool) {
+      let tool: WebMCPTool | undefined;
+      try {
+        tool = (await modelContext.getTools()).find(candidate => candidate.name === name);
+      } catch {
+        // Discovery can race registration; use the same validated handler when unavailable.
+      }
+      if (tool) {
+        try {
+          const rawResult = await modelContext.executeTool(tool, input, { signal });
+          const parsed: unknown = typeof rawResult === 'string' ? JSON.parse(rawResult) : rawResult;
+          if (parsed && typeof parsed === 'object' && 'ok' in parsed) return parsed as { ok: boolean; message?: string };
+          return { ok: true, message: typeof parsed === 'string' ? parsed : JSON.stringify(parsed) };
+        } catch (cause) {
+          return { ok: false, message: cause instanceof Error ? `WebMCP tool invocation failed: ${cause.message}` : 'WebMCP tool invocation failed.' };
+        }
+      }
+    }
+    return applyUiAction(action);
+  }, [applyUiAction]);
+
   useEffect(() => {
-    const doc = document as Document & { modelContext?: { registerTool: (tool: Record<string, unknown>, options?: { signal?: AbortSignal }) => Promise<void> } };
+    const doc = document as Document & { modelContext?: WebMCPContext };
     if (!doc.modelContext?.registerTool) {
       setWebmcp(WEBMCP_FALLBACK);
       return;
@@ -174,7 +208,7 @@ export default function App() {
         annotations: { readOnlyHint: name === 'get_ui_preferences', consequentialHint: false },
         execute: (input: unknown) => {
           const action = validateUiAction(name, input);
-          return JSON.stringify(action ? applyUiAction(action) : { ok: false, message: 'That UI action is invalid.' });
+          return action ? applyUiAction(action) : { ok: false, message: 'That UI action is invalid.' };
         },
       }, { signal: registration.signal });
     })).then(() => { if (active) setWebmcp('WebMCP tools are registered. Chat remains available.'); })
@@ -283,16 +317,15 @@ export default function App() {
           }
           if (Array.isArray(event.tool_calls)) {
             if (depth >= 2) throw Error('The assistant requested too many UI changes in one response.');
-            const toolResults = event.tool_calls.map((call: { id?: unknown; name?: unknown; arguments?: unknown }) => {
-              const action = validateUiAction(call.name, toolArguments(call.arguments));
-              const rawResult = action ? applyUiAction(action) : { ok: false, message: 'That UI action was invalid and was not applied.' };
+            const toolResults = await Promise.all(event.tool_calls.map(async (call: { id?: unknown; name?: unknown; arguments?: unknown }) => {
+              const rawResult = await invokeUiTool(call.name, call.arguments, ctl.signal);
               const resultObject = rawResult && typeof rawResult === 'object' ? rawResult as { ok?: unknown; message?: unknown } : {};
               const result = {
                 ok: resultObject.ok === true,
                 message: typeof resultObject.message === 'string' ? resultObject.message : JSON.stringify(rawResult),
               };
               return { callId: call.id, result };
-            });
+            }));
             const continuation = await fetch(API + '/api/ui-tool-result', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token, 'X-Conversation-ID': conversationId.current },
