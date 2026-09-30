@@ -137,14 +137,12 @@ describe('speech output', () => {
     await waitFor(() => expect(requests.filter(request => request.url.endsWith('/api/speech'))).toHaveLength(1));
     const parts = speechSegments(expectedText);
     expect(parts.length).toBeGreaterThan(3);
-    for (let index = 0; index < 3; index++) {
-      activeUtterance?.onend?.({} as SpeechSynthesisEvent);
-      if (index < 2) await waitFor(() => expect(activeUtterance?.text).toBe(parts[index + 1]));
-    }
+    activeUtterance?.onend?.({} as SpeechSynthesisEvent);
     await waitFor(() => expect(output.snapshot().phase).toBe('speaking-edge'));
     const request = requests.find(item => item.url.endsWith('/api/speech'));
     const sent = JSON.parse(request?.init?.body as string) as { text: string; voice: string };
-    expect(sent.text).toBe(parts[3]);
+    expect(sent.text).toBe(parts[1]);
+    expect(synth.speak).toHaveBeenCalledTimes(1);
     expect(sent.voice).toBe(PREFERRED_VOICE);
     output.stop();
   });
@@ -180,7 +178,7 @@ describe('speech output', () => {
     output.stop();
   });
 
-  it('waits silently at segment four when Brian audio is late instead of speaking it in the browser voice', async () => {
+  it('waits silently at segment two when Brian audio is late instead of speaking it in the browser voice', async () => {
     let activeUtterance: SpeechSynthesisUtterance | undefined;
     let finishBrian!: (response: Response) => void;
     const synth = {
@@ -205,17 +203,14 @@ describe('speech output', () => {
     await waitFor(() => expect(output.snapshot().service).toBe('ready'));
     await waitFor(() => expect(finishBrian).toBeTypeOf('function'));
 
-    for (let index = 0; index < 3; index++) {
-      activeUtterance?.onend?.({} as SpeechSynthesisEvent);
-      if (index < 2) await waitFor(() => expect(activeUtterance?.text).toBe(parts[index + 1]));
-    }
+    activeUtterance?.onend?.({} as SpeechSynthesisEvent);
     await waitFor(() => expect(output.snapshot().phase).toBe('loading'));
-    expect(synth.speak).toHaveBeenCalledTimes(3);
+    expect(synth.speak).toHaveBeenCalledTimes(1);
     expect(audio.play).toHaveBeenCalledTimes(1); // initial browser playback unlock only
 
     finishBrian(new Response(new Blob(['mp3']), { status: 200 }));
     await waitFor(() => expect(audio.play).toHaveBeenCalledTimes(2));
-    expect(synth.speak).toHaveBeenCalledTimes(3);
+    expect(synth.speak).toHaveBeenCalledTimes(1);
     output.stop();
   });
 
@@ -308,11 +303,11 @@ describe('one automatic reconnect per playback', () => {
     await firstClick;
     expect(catalogues).toBe(2);
     expect(requested.filter(value => value === probe)).toHaveLength(1);
-    expect(requested).toContain(parts[3]);
+    expect(requested).toContain(parts[1]);
     expect(played).toEqual([]);
-    for (let index = 0; index < 3; index++) finishBrowser();
+    finishBrowser();
     await waitFor(() => expect(played).toHaveLength(1));
-    expect(spoken.map(utterance => utterance.text)).toEqual(parts.slice(0, 3));
+    expect(spoken.map(utterance => utterance.text)).toEqual(parts.slice(0, 1));
     expect(output.snapshot().phase).toBe('speaking-edge');
   });
 

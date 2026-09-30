@@ -19,6 +19,19 @@ function voiceCatalogue() {
   return new Response(JSON.stringify({ voices: [{ name: 'en-US-BrianMultilingualNeural', locale: 'en-US', friendlyName: 'Brian' }] }), { status: 200 });
 }
 
+function mockApi(sessionCheck: () => Promise<Response> = async () => new Response('{}', { status: 200 })) {
+  const responses = vi.fn();
+  vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (url.endsWith('/api/voices')) return Promise.resolve(voiceCatalogue());
+    if (url.endsWith('/api/session') && (!init?.method || init.method === 'GET')) return sessionCheck();
+    if (url.endsWith('/api/chat') || url.endsWith('/api/ui-tool-result')
+      || (url.endsWith('/api/session') && init?.method === 'POST')) return responses(input, init);
+    throw new Error(`Unexpected test request: ${init?.method || 'GET'} ${url}`);
+  }));
+  return responses;
+}
+
 function responseAfterAbort(signal: AbortSignal | undefined, delta: string) {
   const encoder = new TextEncoder();
   const body = new ReadableStream<Uint8Array>({
@@ -39,12 +52,12 @@ function chatPayload(fetchMock: ReturnType<typeof vi.fn>, index: number) {
 
 describe('chat cancellation and recovery', () => {
   let fetchMock: ReturnType<typeof vi.fn>;
+  let sessionCheck: ReturnType<typeof vi.fn<() => Promise<Response>>>;
 
   beforeEach(() => {
     sessionStorage.setItem('chat-token', 'test-session-token');
-    fetchMock = vi.fn();
-    fetchMock.mockResolvedValueOnce(voiceCatalogue());
-    vi.stubGlobal('fetch', fetchMock);
+    sessionCheck = vi.fn(async () => new Response('{}', { status: 200 }));
+    fetchMock = mockApi(sessionCheck);
   });
 
   it('marks a pre-token cancellation and excludes that unanswered question from the next request', async () => {
@@ -110,11 +123,12 @@ describe('chat cancellation and recovery', () => {
   });
 
   it('asks for the invitation code on composer focus when the stored session expired', async () => {
-    fetchMock.mockResolvedValueOnce(new Response('{}', { status: 401 }));
+    sessionCheck.mockResolvedValueOnce(new Response('{}', { status: 401 }));
     const user = userEvent.setup();
     render(<App />);
     const textbox = screen.getByRole('textbox', { name: 'Message' });
-    await user.type(textbox, 'Test 3 Q1');
+    fireEvent.change(textbox, { target: { value: 'Test 3 Q1' } });
+    await user.click(textbox);
 
     expect(await screen.findByRole('textbox', { name: 'Invitation code' })).toBeInTheDocument();
     expect(sessionStorage.getItem('chat-token')).toBeNull();
@@ -128,7 +142,6 @@ describe('chat cancellation and recovery', () => {
   });
 
   it('restores the unsent draft when the session expires during submission', async () => {
-    fetchMock.mockResolvedValueOnce(new Response('{}', { status: 200 }));
     fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ error: 'Your session expired. Enter the code again.' }), { status: 401 }));
     const user = userEvent.setup();
     render(<App />);
@@ -147,9 +160,7 @@ describe('conversational appearance tools', () => {
 
   beforeEach(() => {
     sessionStorage.setItem('chat-token', 'test-session-token');
-    fetchMock = vi.fn();
-    fetchMock.mockResolvedValueOnce(voiceCatalogue());
-    vi.stubGlobal('fetch', fetchMock);
+    fetchMock = mockApi();
   });
 
   it('applies a validated model color action in the browser and returns its result to Antigravity', async () => {
