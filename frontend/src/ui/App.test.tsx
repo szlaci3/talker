@@ -50,6 +50,50 @@ function chatPayload(fetchMock: ReturnType<typeof vi.fn>, index: number) {
   return JSON.parse(request[1]?.body as string) as { messages: Array<{ role: string; content: string }> };
 }
 
+describe('invitation loading feedback', () => {
+  it.each(['Enter', 'Continue'])('shows loading immediately after %s and opens chat when the request completes', async submit => {
+    const fetchMock = mockApi();
+    let complete!: (response: Response) => void;
+    fetchMock.mockReturnValueOnce(new Promise<Response>(resolve => { complete = resolve; }));
+    const user = userEvent.setup();
+    render(<App />);
+    const code = screen.getByRole('textbox', { name: 'Invitation code' });
+    await user.type(code, 'test-code');
+    if (submit === 'Enter') await user.keyboard('{Enter}');
+    else await user.click(screen.getByRole('button', { name: /Continue/ }));
+
+    expect(screen.getByRole('status')).toHaveTextContent('Opening chat');
+    expect(screen.getByRole('button', { name: 'Connecting…' })).toBeDisabled();
+    expect(code).toBeDisabled();
+    fireEvent.submit(code.closest('form')!);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    complete(new Response(JSON.stringify({ token: 'test-session-token' }), { status: 200 }));
+    expect(await screen.findByRole('textbox', { name: 'Message' })).toBeInTheDocument();
+    expect(screen.queryByText(/Opening chat/)).not.toBeInTheDocument();
+  });
+
+  it('clears loading on failure, preserves the code, and permits retry', async () => {
+    const fetchMock = mockApi();
+    let fail!: (cause: Error) => void;
+    fetchMock.mockReturnValueOnce(new Promise<Response>((_resolve, reject) => { fail = reject; }));
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ token: 'test-session-token' }), { status: 200 }));
+    const user = userEvent.setup();
+    render(<App />);
+    await user.type(screen.getByRole('textbox', { name: 'Invitation code' }), 'test-code');
+    await user.click(screen.getByRole('button', { name: /Continue/ }));
+    expect(screen.getByRole('status')).toHaveTextContent('Opening chat');
+    fail(new Error('Connection interrupted.'));
+
+    expect(await screen.findByText('Connection interrupted.')).toBeInTheDocument();
+    expect(screen.queryByText(/Opening chat/)).not.toBeInTheDocument();
+    expect(screen.getByRole('textbox', { name: 'Invitation code' })).toHaveValue('test-code');
+    expect(screen.getByRole('button', { name: /Continue/ })).toBeEnabled();
+    await user.click(screen.getByRole('button', { name: /Continue/ }));
+    expect(await screen.findByRole('textbox', { name: 'Message' })).toBeInTheDocument();
+  });
+});
+
 describe('chat cancellation and recovery', () => {
   let fetchMock: ReturnType<typeof vi.fn>;
   let sessionCheck: ReturnType<typeof vi.fn<() => Promise<Response>>>;

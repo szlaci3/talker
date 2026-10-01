@@ -58,6 +58,8 @@ export default function App() {
   const [token, setToken] = useState(sessionStorage.getItem('chat-token') || '');
   const conversationId = useRef(crypto.randomUUID());
   const [gate, setGate] = useState('');
+  const [gatePending, setGatePending] = useState(false);
+  const gateRequestPending = useRef(false);
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
@@ -223,6 +225,9 @@ export default function App() {
 
   async function enter(e: FormEvent) {
     e.preventDefault();
+    if (gateRequestPending.current) return;
+    gateRequestPending.current = true;
+    setGatePending(true);
     setError('');
     try {
       const r = await fetch(API + '/api/session', {
@@ -236,6 +241,9 @@ export default function App() {
       setToken(j.token);
     } catch (x) {
       setError((x as Error).message);
+    } finally {
+      gateRequestPending.current = false;
+      setGatePending(false);
     }
   }
 
@@ -374,10 +382,11 @@ export default function App() {
       <div className="mark">✳</div>
       <h1>A quieter kind of chat.</h1>
       <p>Enter your invitation code to begin.</p>
-      <form onSubmit={enter}>
-        <input aria-label="Invitation code" value={gate} onChange={e => setGate(e.target.value)} autoFocus />
-        <button>Continue <span>→</span></button>
+      <form onSubmit={enter} aria-busy={gatePending}>
+        <input aria-label="Invitation code" value={gate} onChange={e => setGate(e.target.value)} disabled={gatePending} autoFocus />
+        <button type="submit" disabled={gatePending}>{gatePending ? 'Connecting…' : <>Continue <span>→</span></>}</button>
       </form>
+      {gatePending && <p className="gate-loading" role="status">Opening chat… This may take a moment while the service starts.</p>}
       {error && <p className="error">{error}</p>}
     </main>;
   }
