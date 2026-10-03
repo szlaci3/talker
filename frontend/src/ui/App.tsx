@@ -3,6 +3,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { accessibleTextColor, COLOR_CSS_VARIABLES, COLOR_TARGETS, ColorPreferences, ColorTarget, contrastRatio, DEFAULT_COLORS, initialScale, initialTheme, parseColor, readSavedColors, Theme, UI_TOOL_DECLARATIONS, UiAction, validateUiAction } from './uiTools';
 import { SpeechOutput, SpeechSnapshot } from './speechOutput';
+import { executeNativeUiTool, WebMCPContext, WebMCPTool } from './webmcp';
 
 type Message = {
   id: string;
@@ -14,13 +15,6 @@ type Message = {
 const API = import.meta.env.VITE_API_URL || 'http://localhost:8080';
 const suggestions = ['What can you help me with?', 'Explain a tricky idea simply', 'Help me plan a small project'];
 const WEBMCP_FALLBACK = "WebMCP isn't available in this browser. Chat and conversational UI controls remain available.";
-
-type WebMCPTool = { name: string };
-type WebMCPContext = {
-  registerTool: (tool: Record<string, unknown>, options?: { signal?: AbortSignal }) => Promise<void>;
-  getTools: () => Promise<WebMCPTool[]>;
-  executeTool: (tool: WebMCPTool, input?: unknown, options?: { signal?: AbortSignal }) => Promise<string>;
-};
 
 function preferences(theme: string, scale: number): { theme: string; fontScale: number; colors: ColorPreferences } {
   const root = document.documentElement;
@@ -172,7 +166,7 @@ export default function App() {
     if (!action || typeof name !== 'string') return { ok: false, message: 'That UI action was invalid and was not applied.' };
 
     const modelContext = (document as Document & { modelContext?: WebMCPContext }).modelContext;
-    if (modelContext?.getTools && modelContext.executeTool) {
+    if (modelContext && typeof modelContext.getTools === 'function' && typeof modelContext.executeTool === 'function') {
       let tool: WebMCPTool | undefined;
       try {
         tool = (await modelContext.getTools()).find(candidate => candidate.name === name);
@@ -181,7 +175,7 @@ export default function App() {
       }
       if (tool) {
         try {
-          const rawResult = await modelContext.executeTool(tool, input, { signal });
+          const rawResult = await executeNativeUiTool(modelContext, tool, input, signal);
           const parsed: unknown = typeof rawResult === 'string' ? JSON.parse(rawResult) : rawResult;
           if (parsed && typeof parsed === 'object' && 'ok' in parsed) return parsed as { ok: boolean; message?: string };
           return { ok: true, message: typeof parsed === 'string' ? parsed : JSON.stringify(parsed) };

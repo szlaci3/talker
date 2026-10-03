@@ -227,12 +227,15 @@ describe('conversational appearance tools', () => {
     });
   });
 
-  it('routes assistant appearance calls through native WebMCP discovery and execution when available', async () => {
+  it.each(['object', 'JSON string'])('routes assistant appearance calls through native WebMCP with %s arguments', async format => {
     const registered: Array<Record<string, unknown>> = [];
     const executeTool = vi.fn(async (tool: { name: string }, input: unknown) => {
+      if (format === 'JSON string' && typeof input !== 'string') {
+        throw new DOMException('Failed to parse input arguments', 'UnknownError');
+      }
       const descriptor = registered.find(candidate => candidate.name === tool.name)!;
       const execute = descriptor.execute as (args: unknown) => unknown;
-      return JSON.stringify(await execute(input));
+      return JSON.stringify(await execute(typeof input === 'string' ? JSON.parse(input) : input));
     });
     Object.defineProperty(document, 'modelContext', { configurable: true, value: {
       registerTool: vi.fn(async (tool: Record<string, unknown>) => { registered.push(tool); }),
@@ -252,6 +255,10 @@ describe('conversational appearance tools', () => {
 
       expect(await screen.findByText('Dark mode is on.')).toBeInTheDocument();
       expect(executeTool).toHaveBeenCalledWith({ name: 'set_theme' }, { theme: 'dark' }, expect.objectContaining({ signal: expect.any(AbortSignal) }));
+      expect(executeTool).toHaveBeenCalledTimes(format === 'object' ? 1 : 2);
+      if (format === 'JSON string') {
+        expect(executeTool).toHaveBeenLastCalledWith({ name: 'set_theme' }, JSON.stringify({ theme: 'dark' }), expect.objectContaining({ signal: expect.any(AbortSignal) }));
+      }
       expect(document.documentElement.dataset.theme).toBe('dark');
     } finally {
       delete (document as Document & { modelContext?: unknown }).modelContext;
