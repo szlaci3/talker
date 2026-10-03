@@ -23,7 +23,7 @@ Use these as provisional defaults when implementation is authorized; record devi
 | Speech | edge-tts with the exact requested Brian voice; browser Daniel during warmup | Enumerate live voices and synthesize a generic sample; verify identifier, never guess it |
 | Input language | English initially, configurable | Additional languages undecided; Brian being multilingual does not establish input recognition support |
 | Entry gate | Configured random invitation code, validated server-side | User's original daily-number/date idea remains an alternative; settle before public release |
-| Turn ending | Tunable silence interval plus transcript stabilization | Calibrate with real speech; do not promise a fixed delay |
+| Turn ending | Four seconds of silence after speech, stored as one configurable 4,000 ms value; “Send now” submits early | Countdown appears only for the final two seconds; recognition corrections alone do not reset it |
 
 No secrets belong in documentation, prompts, tests, logs, or frontend configuration. Without credentials, develop and test through an explicitly labeled mock adapter, then report the live integration as unverified. Do not claim mocked responses complete the real chat milestone. Do not install a paid transcription provider or purchase hosting without authorization.
 
@@ -59,7 +59,7 @@ Read Reciter's `edge-speech.js`, `speech.js`, `app.js`, `server.py`, and deploym
 
 Acceptance: cold backend does not block the static UI; fallback explains which voice is in use; switch occurs only for matching unread text; no omitted/duplicated words during a normal handoff; Stop cancels pending audio and prevents late playback; synthesis errors have bounded retries. Check an actual Brian sample and fallback playback separately from mocks. Backend wakeup also delays new Google replies; Daniel cannot speak an answer that has not arrived.
 
-### 4. Live hands-free input and interruptions
+### 4. Live speech input and explicit turn control
 
 First verify recognition, partial results, and interruption detection on the target desktop setup. If native recognition cannot deliver them, isolate that limitation behind a transcription adapter and evaluate a streaming alternative; do not describe it as solved by edge-tts.
 
@@ -67,14 +67,13 @@ Use explicit states such as off, listening, settling, generating, speaking, and 
 
 - Show current partial words immediately. Apply recognition revisions to the same draft; avoid appending the entire transcript on every event.
 - Briefly highlight corrected spans, leaving unchanged words steady. Handle insertions/deletions and reduced-motion preferences. Visual polish must not delay text display.
-- Commit once when end-of-turn criteria are met, using the latest draft. A recognizer's finalized fragment alone is not a completed conversational turn. Reset settling when speech resumes.
-- On detected user speech during playback, immediately stop HTML audio and browser synthesis, discard prefetched/queued speech, invalidate old callbacks, and listen. Proposed default: cancel the old model stream too and leave its partial answer visibly interrupted.
-- Do not wait for the new utterance's final transcript before stopping speech. Measure detection-to-stop latency. Avoid claiming zero latency.
-- Prevent assistant playback from triggering interruption or a new user message. Test both headphones and speakers; do not rely on raw volume alone. Echo handling is a feasibility check, not something Reciter already solves.
-- Keep submitted turn text stable. Proposed default: late events from a committed turn must not silently rewrite an answered message or send it again; provide an explicit correction route if needed.
+- Commit the latest nonempty draft once after four seconds of silence; speech resuming cancels settling and starts a fresh interval when speech ends. Recognition corrections alone do not reset the timer. “Send now” uses the same guarded submit path. Ignore silence while the draft is empty. Show “Listening” until the final two seconds, then show the countdown.
+- Do not interpret microphone speech as interruption while the assistant is generating or speaking. A shared “Interrupt” button explicitly cancels generation and pending speech preparation, or stops current playback, then returns to listening. Keep any partial generated answer visibly marked as interrupted.
+- During this speech-input scope, retain the existing speech-output behavior: the user clicks Play after the complete answer is available. Future output work may stream speech by synthesizing and playing early answer text, followed by later chunks using current chunk sizes.
+- Keep submitted turn text stable. Late events from a committed turn must not silently rewrite an answered message or send it again.
 - Exiting voice mode releases microphone resources and cancels pending turn timers. Typed chat remains usable.
 
-Acceptance: live words revise in place with visible feedback; natural pauses do not send duplicate turns; replies play automatically after initial activation; user speech interrupts and becomes the next turn; assistant audio does not create false turns; late events cannot restart old audio. Include meaningful state/race tests and a real microphone/speaker check. If interactive checks cannot be run, supply exact user verification steps and mark them pending.
+Acceptance: live words revise in place; changed spans receive `#ffdd00` highlight for five seconds; empty drafts never auto-send; the four-second silence timer resets on renewed speech but not transcript-only corrections; “Send now” and timer expiry cannot duplicate a submission; late events cannot alter submitted text. The shared “Interrupt” action cancels generation or playback and returns to listening. Assistant speech output remains manual Play for this scope. Include meaningful state/race tests and a real microphone check. If interactive checks cannot be run, supply exact user verification steps and mark them pending.
 
 ### 5. Release and review
 
