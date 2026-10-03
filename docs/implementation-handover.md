@@ -21,7 +21,7 @@ Use these as provisional defaults when implementation is authorized; record devi
 | UI settings | System theme initially; theme and font scale may persist locally | Reset always available |
 | Model provider | Antigravity managed agent; no Gemini fallback | User reports higher daily and per-minute token quotas on their Antigravity API access; deployed use has been verified. Do not set the agent ID as `GOOGLE_MODEL` |
 | Speech | edge-tts with the exact requested Brian voice; browser Daniel during warmup | Enumerate live voices and synthesize a generic sample; verify identifier, never guess it |
-| Input language | English initially, configurable | Additional languages undecided; Brian being multilingual does not establish input recognition support |
+| Input language v1 | English and Hungarian, English selected by default | Verify native recognition availability for both locales in target desktop browsers |
 | Entry gate | Configured random invitation code, validated server-side | User's original daily-number/date idea remains an alternative; settle before public release |
 | Voice input v1 | User clicks Mic, dictates into the composer, and clicks Send; recording spans pauses | Corrections highlighted `#ffdd00` for five seconds; same control becomes Interrupt during generation/playback and then starts microphone input |
 | Voice v2 (deferred) | Four seconds of silence auto-submits; “Send now” submits early | Countdown only in final two seconds; incremental answer speech also deferred |
