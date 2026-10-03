@@ -23,7 +23,8 @@ Use these as provisional defaults when implementation is authorized; record devi
 | Speech | edge-tts with the exact requested Brian voice; browser Daniel during warmup | Enumerate live voices and synthesize a generic sample; verify identifier, never guess it |
 | Input language | English initially, configurable | Additional languages undecided; Brian being multilingual does not establish input recognition support |
 | Entry gate | Configured random invitation code, validated server-side | User's original daily-number/date idea remains an alternative; settle before public release |
-| Turn ending | Four seconds of silence after speech, stored as one configurable 4,000 ms value; “Send now” submits early | Countdown appears only for the final two seconds; recognition corrections alone do not reset it |
+| Voice input v1 | User clicks Mic, dictates into the composer, and clicks Send; recording spans pauses | Corrections highlighted `#ffdd00` for five seconds; same control becomes Interrupt during generation/playback and then starts microphone input |
+| Voice v2 (deferred) | Four seconds of silence auto-submits; “Send now” submits early | Countdown only in final two seconds; incremental answer speech also deferred |
 
 No secrets belong in documentation, prompts, tests, logs, or frontend configuration. Without credentials, develop and test through an explicitly labeled mock adapter, then report the live integration as unverified. Do not claim mocked responses complete the real chat milestone. Do not install a paid transcription provider or purchase hosting without authorization.
 
@@ -59,21 +60,21 @@ Read Reciter's `edge-speech.js`, `speech.js`, `app.js`, `server.py`, and deploym
 
 Acceptance: cold backend does not block the static UI; fallback explains which voice is in use; switch occurs only for matching unread text; no omitted/duplicated words during a normal handoff; Stop cancels pending audio and prevents late playback; synthesis errors have bounded retries. Check an actual Brian sample and fallback playback separately from mocks. Backend wakeup also delays new Google replies; Daniel cannot speak an answer that has not arrived.
 
-### 4. Live speech input and explicit turn control
+### 4. Voice input v1 and explicit turn control
 
-First verify recognition, partial results, and interruption detection on the target desktop setup. If native recognition cannot deliver them, isolate that limitation behind a transcription adapter and evaluate a streaming alternative; do not describe it as solved by edge-tts.
+First verify recognition and partial results on the target desktop setup. If native recognition cannot deliver them, show a clear unsupported-browser fallback; isolate recognition behind an adapter so a streaming alternative can be evaluated separately. Keep recognition running until Send even if the browser ends an individual recognition session after a pause; restart it while the same dictated draft remains open. Microphone permission, actual browser support, and service interruptions must have clear recoverable states; do not describe them as solved by edge-tts.
 
-Use explicit states such as off, listening, settling, generating, speaking, and error. Maintain a monotonically increasing turn/generation identifier so stale recognition, model, and audio events cannot affect a newer turn. Recognizer availability during speaking is necessary for interruption; do not implement it by muting the microphone whenever the assistant speaks.
+Use explicit states such as off, listening, generating, speaking, and error. Maintain a monotonically increasing turn/generation identifier so stale recognition, model, and audio events cannot affect a newer turn. Voice input starts only after the user clicks Mic or Interrupt.
 
 - Show current partial words immediately. Apply recognition revisions to the same draft; avoid appending the entire transcript on every event.
-- Briefly highlight corrected spans, leaving unchanged words steady. Handle insertions/deletions and reduced-motion preferences. Visual polish must not delay text display.
-- Commit the latest nonempty draft once after four seconds of silence; speech resuming cancels settling and starts a fresh interval when speech ends. Recognition corrections alone do not reset the timer. “Send now” uses the same guarded submit path. Ignore silence while the draft is empty. Show “Listening” until the final two seconds, then show the countdown.
-- Do not interpret microphone speech as interruption while the assistant is generating or speaking. A shared “Interrupt” button explicitly cancels generation and pending speech preparation, or stops current playback, then returns to listening. Keep any partial generated answer visibly marked as interrupted.
-- During this speech-input scope, retain the existing speech-output behavior: the user clicks Play after the complete answer is available. Future output work may stream speech by synthesizing and playing early answer text, followed by later chunks using current chunk sizes.
+- Highlight corrected spans with `#ffdd00` for five seconds, leaving unchanged words steady. Handle insertions/deletions. Visual feedback must not delay transcript display.
+- Keep recognition active through pauses of any length; do not auto-submit on silence. The user clicks Send to commit the latest transcript once. Freeze submitted text and ignore late recognition callbacks.
+- Use one dynamic control: “Mic” when voice input can start; “Interrupt” while generation or answer playback is active. While recording, show “Listening” as status and leave Send as the explicit end-and-submit action. Interrupt cancels generation and pending speech preparation, or stops current playback, then starts microphone input. Keep any partial generated answer visibly marked as interrupted.
+- Retain the existing speech-output behavior: the user clicks Play after the complete answer is available. V2 may add silence-based submission and incremental speech that plays early answer chunks while later text arrives; neither belongs in v1.
 - Keep submitted turn text stable. Late events from a committed turn must not silently rewrite an answered message or send it again.
 - Exiting voice mode releases microphone resources and cancels pending turn timers. Typed chat remains usable.
 
-Acceptance: live words revise in place; changed spans receive `#ffdd00` highlight for five seconds; empty drafts never auto-send; the four-second silence timer resets on renewed speech but not transcript-only corrections; “Send now” and timer expiry cannot duplicate a submission; late events cannot alter submitted text. The shared “Interrupt” action cancels generation or playback and returns to listening. Assistant speech output remains manual Play for this scope. Include meaningful state/race tests and a real microphone check. If interactive checks cannot be run, supply exact user verification steps and mark them pending.
+Acceptance: clicking Mic starts live transcription; words revise in place; corrected spans receive `#ffdd00` highlight for five seconds; recognition remains active through long pauses; only Send submits the draft; late events cannot alter submitted text. Interrupt cancels generation or playback and starts microphone input. Assistant speech output remains manual Play. Include meaningful state/race tests and a real microphone check. If interactive checks cannot be run, supply exact user verification steps and mark them pending.
 
 ### 5. Release and review
 
