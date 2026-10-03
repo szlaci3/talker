@@ -6,5 +6,8 @@ Invitation loading: After the latest fix is deployed, Enter/Continue immediately
 Warmup handoff: Browser speech switches audibly to Brian without skipped or repeated words.
 Automatic recovery: After a temporary speech-service failure, Brian returns without clicking Reconnect.
 Expiry on focus: An expired session opens the invitation gate when you focus the composer, before sending.
-WebMCP compatibility: After deployment, ask Talker to switch themes in Chrome 154 with WebMCP enabled; native registration, discovery, and console execution already passed.
+
+# Passed
+
+WebMCP compatibility: Deployed Chrome 154 reaches native execution and the JSON retry for UI prompts; non-UI prompts do not invoke these tools.
 
