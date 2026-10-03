@@ -24,7 +24,7 @@ Use these as provisional defaults when implementation is authorized; record devi
 | Input language v1 | English and Hungarian, English selected by default | Verify native recognition availability for both locales on target desktop browsers and mobile |
 | Audio setup | Headphones or speakers; mobile built-in microphone is a supported setup | Stop answer generation/playback before starting recognition; verify on available desktop and mobile devices |
 | Entry gate | Configured random invitation code, validated server-side | User's original daily-number/date idea remains an alternative; settle before public release |
-| Voice input v1 | User clicks Mic, dictates into the composer, and clicks Send; recording spans pauses | Corrections highlighted `#ffdd00` for five seconds; same control becomes Interrupt during generation/playback and then starts microphone input |
+| Voice input v1 | User clicks Mic, dictates into the composer (appending to existing text), and clicks Send; recording spans pauses | Corrections highlighted `#ffdd00` for five seconds; same control becomes Interrupt during generation/playback and then starts microphone input |
 | Voice v2 (deferred) | Four seconds of silence auto-submits; “Send now” submits early | Countdown only in final two seconds; incremental answer speech also deferred |
 
 No secrets belong in documentation, prompts, tests, logs, or frontend configuration. Without credentials, develop and test through an explicitly labeled mock adapter, then report the live integration as unverified. Do not claim mocked responses complete the real chat milestone. Do not install a paid transcription provider or purchase hosting without authorization.
@@ -67,7 +67,7 @@ First verify recognition and partial results on target desktop browsers and an a
 
 Use explicit states such as off, listening, generating, speaking, and error. Maintain a monotonically increasing turn/generation identifier so stale recognition, model, and audio events cannot affect a newer turn. Voice input starts only after the user clicks Mic or Interrupt.
 
-- Show current partial words immediately. Apply recognition revisions to the same draft; avoid appending the entire transcript on every event.
+- Show current partial words immediately. Append dictated text after any existing composer draft, then apply recognition revisions in place; avoid appending the entire transcript on every event.
 - Highlight corrected spans with `#ffdd00` for five seconds, leaving unchanged words steady. Handle insertions/deletions. Visual feedback must not delay transcript display.
 - Keep recognition active through pauses of any length; do not auto-submit on silence. The user clicks Send to commit the latest transcript once. Freeze submitted text and ignore late recognition callbacks.
 - Use one dynamic control: “Mic” when voice input can start; “Interrupt” while generation or answer playback is active. While recording, show “Listening” as status and leave Send as the explicit end-and-submit action. Interrupt cancels generation and pending speech preparation, or stops current playback, then starts microphone input. Keep any partial generated answer visibly marked as interrupted.
