@@ -8,7 +8,7 @@ The user intends GPT-6-astra/high for planning and later review, and GPT-6-luna/
 
 Workspace: `C:\Users\szala\Combine\Talker`. Reference project, read-only for this work: `C:\Users\szala\Planets\Reciter`. AGENTS.md contains the user's Browser Use limitation; do not promise interactive browser verification using an unavailable tool.
 
-Recommended stack: React/TypeScript/Vite frontend on Netlify; Python/aiohttp backend on Render for Antigravity and edge-tts. Do not implement a Gemini fallback. Antigravity uses its managed remote environment; disable agent tools for this chat-only app. A single conversation, general assistant, desktop only. No account system, conversation sidebar, attachments, database-backed chat history, or mobile work. Do not import Reciter's document library or learning features.
+Recommended stack: React/TypeScript/Vite frontend on Netlify; Python/aiohttp backend on Render for Antigravity and edge-tts. Do not implement a Gemini fallback. Antigravity uses its managed remote environment; disable agent tools for this chat-only app. A single conversation and general assistant. The chat/WebMCP portfolio target remains desktop, while voice input must also support mobile. No account system, conversation sidebar, attachments, or database-backed chat history. Do not import Reciter's document library or learning features.
 
 ## Starting defaults and unresolved dependencies
 
@@ -21,7 +21,8 @@ Use these as provisional defaults when implementation is authorized; record devi
 | UI settings | System theme initially; theme and font scale may persist locally | Reset always available |
 | Model provider | Antigravity managed agent; no Gemini fallback | User reports higher daily and per-minute token quotas on their Antigravity API access; deployed use has been verified. Do not set the agent ID as `GOOGLE_MODEL` |
 | Speech | edge-tts with the exact requested Brian voice; browser Daniel during warmup | Enumerate live voices and synthesize a generic sample; verify identifier, never guess it |
-| Input language v1 | English and Hungarian, English selected by default | Verify native recognition availability for both locales in target desktop browsers |
+| Input language v1 | English and Hungarian, English selected by default | Verify native recognition availability for both locales on target desktop browsers and mobile |
+| Audio setup | Headphones or speakers; mobile built-in microphone is a supported setup | Stop answer generation/playback before starting recognition; verify on available desktop and mobile devices |
 | Entry gate | Configured random invitation code, validated server-side | User's original daily-number/date idea remains an alternative; settle before public release |
 | Voice input v1 | User clicks Mic, dictates into the composer, and clicks Send; recording spans pauses | Corrections highlighted `#ffdd00` for five seconds; same control becomes Interrupt during generation/playback and then starts microphone input |
 | Voice v2 (deferred) | Four seconds of silence auto-submits; “Send now” submits early | Countdown only in final two seconds; incremental answer speech also deferred |
@@ -62,7 +63,7 @@ Acceptance: cold backend does not block the static UI; fallback explains which v
 
 ### 4. Voice input v1 and explicit turn control
 
-First verify recognition and partial results on the target desktop setup. If native recognition cannot deliver them, show a clear unsupported-browser fallback; isolate recognition behind an adapter so a streaming alternative can be evaluated separately. Keep recognition running until Send even if the browser ends an individual recognition session after a pause; restart it while the same dictated draft remains open. Microphone permission, actual browser support, and service interruptions must have clear recoverable states; do not describe them as solved by edge-tts.
+First verify recognition and partial results on target desktop browsers and an available mobile device, using both headphones and speakers where practical. If native recognition cannot deliver them, show a clear unsupported-browser fallback; isolate recognition behind an adapter so a streaming alternative can be evaluated separately. Keep recognition running until Send even if the browser ends an individual recognition session after a pause; restart it while the same dictated draft remains open. Microphone permission, actual browser support, and service interruptions must have clear recoverable states; do not describe them as solved by edge-tts. Stop answer generation/playback before starting recognition to avoid capturing the assistant's voice.
 
 Use explicit states such as off, listening, generating, speaking, and error. Maintain a monotonically increasing turn/generation identifier so stale recognition, model, and audio events cannot affect a newer turn. Voice input starts only after the user clicks Mic or Interrupt.
 
@@ -74,7 +75,7 @@ Use explicit states such as off, listening, generating, speaking, and error. Mai
 - Keep submitted turn text stable. Late events from a committed turn must not silently rewrite an answered message or send it again.
 - Exiting voice mode releases microphone resources and cancels pending turn timers. Typed chat remains usable.
 
-Acceptance: clicking Mic starts live transcription; words revise in place; corrected spans receive `#ffdd00` highlight for five seconds; recognition remains active through long pauses; only Send submits the draft; late events cannot alter submitted text. Interrupt cancels generation or playback and starts microphone input. Assistant speech output remains manual Play. Include meaningful state/race tests and a real microphone check. If interactive checks cannot be run, supply exact user verification steps and mark them pending.
+Acceptance: clicking Mic starts live transcription; words revise in place; corrected spans receive `#ffdd00` highlight for five seconds; recognition remains active through long pauses; only Send submits the draft; late events cannot alter submitted text. Interrupt cancels generation or playback and starts microphone input. Assistant speech output remains manual Play. Verify supported desktop and mobile setups, including headphones and speakers where available. Include meaningful state/race tests and a real microphone check. If interactive checks cannot be run, supply exact user verification steps and mark them pending.
 
 ### 5. Release and review
 
