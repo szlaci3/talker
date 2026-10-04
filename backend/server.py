@@ -241,12 +241,13 @@ async def live_token_route(request):
         "uses": 1,
         "expireTime": expires_at,
         "newSessionExpireTime": datetime.fromtimestamp(time.time() + 60, timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
-        "liveConnectConstraints": {
+        # REST uses BidiGenerateContentSetup, not the SDK's liveConnectConstraints.
+        # Lock transcription settings while allowing the client's resumption handle.
+        "fieldMask": "model,generationConfig,inputAudioTranscription",
+        "bidiGenerateContentSetup": {
             "model": "models/gemini-3.5-transcribe-live",
-            "config": {
-                "responseModalities": ["TEXT"],
-                "inputAudioTranscription": {"languageCodes": []},
-            },
+            "generationConfig": {"responseModalities": ["TEXT"]},
+            "inputAudioTranscription": {"languageCodes": []},
         },
     }
     try:

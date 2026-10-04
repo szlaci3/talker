@@ -4,6 +4,7 @@ import sys
 import time
 import types
 import unittest
+from datetime import datetime, timezone
 from unittest.mock import patch
 
 from aiohttp.test_utils import TestClient, TestServer
@@ -123,15 +124,33 @@ class SpeechRoutesTest(unittest.IsolatedAsyncioTestCase):
             response = await self.client.post("/api/live-token", headers=self.headers())
         self.assertEqual(response.status, 200)
         self.assertEqual(await response.json(), {"token": "single-use-live-token"})
+        self.assertEqual(response.headers["Cache-Control"], "no-store")
+        self.assertEqual(len(FakeTokenClient.calls), 1)
         url, request = FakeTokenClient.calls[0]
         self.assertEqual(url, "https://generativelanguage.googleapis.com/v1beta/auth_tokens")
         self.assertEqual(request["headers"]["x-goog-api-key"], "server-only-test-google-key")
-        self.assertEqual(request["json"]["uses"], 1)
-        constraints = request["json"]["liveConnectConstraints"]
-        self.assertEqual(constraints["model"], "models/gemini-3.5-transcribe-live")
-        self.assertEqual(constraints["config"]["responseModalities"], ["TEXT"])
-        self.assertEqual(constraints["config"]["inputAudioTranscription"]["languageCodes"], [])
-        self.assertNotIn("sessionResumption", constraints["config"])
+        # Wire contract from Google's v1beta discovery schema (2026-10-04):
+        # https://generativelanguage.googleapis.com/$discovery/rest?version=v1beta
+        # SDK-only liveConnectConstraints/config nesting causes HTTP 400.
+        payload = request["json"]
+        self.assertEqual(set(payload), {
+            "uses", "expireTime", "newSessionExpireTime", "fieldMask", "bidiGenerateContentSetup",
+        })
+        self.assertEqual(payload["uses"], 1)
+        self.assertEqual(payload["bidiGenerateContentSetup"], {
+            "model": "models/gemini-3.5-transcribe-live",
+            "generationConfig": {"responseModalities": ["TEXT"]},
+            "inputAudioTranscription": {"languageCodes": []},
+        })
+        # An absent mask would ignore the browser's entire setup, including resumption.
+        self.assertEqual(set(payload["fieldMask"].split(",")), {
+            "model", "generationConfig", "inputAudioTranscription",
+        })
+        now = datetime.now(timezone.utc)
+        for field, maximum in [("expireTime", 1800), ("newSessionExpireTime", 60)]:
+            remaining = (datetime.fromisoformat(payload[field]) - now).total_seconds()
+            self.assertGreater(remaining, maximum - 10)
+            self.assertLessEqual(remaining, maximum)
 
     async def test_live_token_provider_error_is_actionable_and_redacts_the_api_key(self):
         FakeTokenResponse.status = 400
