@@ -360,6 +360,7 @@ export default function App() {
     const assistantMessage: Message = { id: assistantId, role: 'assistant', content: '', status: 'pending' };
     setMessages(cur => [...cur, userMessage, assistantMessage]);
     setBusy(true);
+    if (keepLiveOpen) speechOutput.current?.startStreaming(assistantId);
 
     const ctl = new AbortController();
     abort.current = ctl;
@@ -403,6 +404,7 @@ export default function App() {
           if (typeof event.delta === 'string') {
             streamedAnswer += event.delta;
             setMessages(cur => cur.map(m => m.id === assistantId ? { ...m, content: m.content + event.delta } : m));
+            if (keepLiveOpen) speechOutput.current?.appendStreaming(assistantId, streamedAnswer);
           }
           if (Array.isArray(event.tool_calls)) {
             if (depth >= 2) throw Error('The assistant requested too many UI changes in one response.');
@@ -435,9 +437,10 @@ export default function App() {
       };
       await readEvents(r);
       setMessages(cur => cur.map(m => m.id === assistantId ? { ...m, status: 'complete' } : m));
-      if (liveActiveRef.current && streamedAnswer.trim()) speechOutput.current?.play(assistantId, streamedAnswer);
+      if (keepLiveOpen && streamedAnswer.trim()) speechOutput.current?.finishStreaming(assistantId, streamedAnswer);
     } catch (x) {
       const canceled = (x as Error).name === 'AbortError';
+      if (speechOutput.current?.snapshot().messageId === assistantId) speechOutput.current.stop();
       if (canceled) conversationId.current = crypto.randomUUID();
       else setError((x as Error).message);
       setMessages(cur => {
@@ -543,14 +546,17 @@ export default function App() {
     dictationBase.current = input;
     setLiveActive(true);
     setDictationActive(true);
+    speechOutput.current?.unlock();
     startSpeechInput('live');
   }
 
-  function stopLive() {
+  function stopLive(preservePlayback = false) {
     liveActiveRef.current = false;
     clearLiveSilenceTimer();
-    if (abort.current) abort.current.abort();
-    speechOutput.current?.stop();
+    if (!preservePlayback) {
+      if (abort.current) abort.current.abort();
+      speechOutput.current?.stop();
+    }
     speechInput.current?.stop();
     speechInput.current = null;
     setLiveActive(false);
@@ -585,8 +591,8 @@ export default function App() {
   return <main className="shell" onClickCapture={event => {
     if (!liveActiveRef.current) return;
     const target = event.target;
-    if (target instanceof Element && target.closest('.composer .live')) return;
-    stopLive();
+    if (target instanceof Element && target.closest('.composer .live, .composer .send-now, .composer .interrupt')) return;
+    stopLive(Boolean(target instanceof Element && target.closest('.speech-controls')));
   }}>
     <header>
       <a className="brand" href="/">✳ <span>Chat</span></a>
@@ -627,7 +633,7 @@ export default function App() {
             {m.role === 'assistant' && m.content
               ? <ReactMarkdown remarkPlugins={[remarkGfm]} skipHtml>{m.content}</ReactMarkdown>
               : m.content || (m.status === 'pending' ? <span className="typing">Thinking<span>…</span></span> : '')}
-            {m.role === 'assistant' && m.status === 'complete' && m.content.trim() && <div className="speech-controls">
+            {m.role === 'assistant' && m.content.trim() && (m.status === 'complete' || (liveActive && speech.messageId === m.id && ['loading', 'speaking-edge', 'speaking-browser', 'paused'].includes(speech.phase))) && <div className="speech-controls">
               <button type="button" onClick={() => speechOutput.current?.toggle(m.id, m.content)}>
                 {speech.messageId === m.id && speech.phase === 'paused' ? 'Resume'
                   : speech.messageId === m.id && ['loading', 'speaking-edge', 'speaking-browser'].includes(speech.phase) ? 'Pause'

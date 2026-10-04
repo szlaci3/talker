@@ -5,7 +5,7 @@ import App from './App';
 import type { TranscriptUpdate } from './speechInput';
 
 const speechInputMock = vi.hoisted(() => ({ instances: [] as Array<{ callbacks: { onTranscript: (update: TranscriptUpdate) => void; onStatus: (status: string) => void; onSpeechStarted?: () => void; onSpeechEnded?: (elapsed?: number) => void }; stopped: boolean }> }));
-const speechOutputMock = vi.hoisted(() => ({ instances: [] as Array<{ phase: string; messageId: string | null; plays: Array<[string, string]>; toggles: Array<[string, string]>; stops: number }> }));
+const speechOutputMock = vi.hoisted(() => ({ instances: [] as Array<{ phase: string; messageId: string | null; plays: Array<[string, string]>; toggles: Array<[string, string]>; streamed: string[]; stops: number }> }));
 vi.mock('./speechInput', () => ({ SpeechInput: class {
   readonly callbacks: typeof speechInputMock.instances[number]['callbacks'];
   stopped = false;
@@ -22,14 +22,25 @@ vi.mock('./speechOutput', () => ({ SpeechOutput: class {
   messageId: string | null = null;
   plays: Array<[string, string]> = [];
   toggles: Array<[string, string]> = [];
+  streamed: string[] = [];
   stops = 0;
   constructor(_api: string, _getToken: () => string, private onSnapshot: (value: { messageId: string | null; phase: string; service: string; detail: string }) => void) {
     speechOutputMock.instances.push(this);
   }
   snapshot() { return { messageId: this.messageId, phase: this.phase, service: 'idle', detail: '' }; }
   async warmup() {}
+  unlock() {}
   play(messageId: string, text: string) { this.messageId = messageId; this.phase = 'speaking-browser'; this.plays.push([messageId, text]); this.onSnapshot(this.snapshot()); }
-  toggle(messageId: string, text: string) { this.messageId = messageId; this.phase = 'speaking-browser'; this.toggles.push([messageId, text]); this.onSnapshot(this.snapshot()); }
+  startStreaming(messageId: string) { this.messageId = messageId; this.phase = 'loading'; this.streamed.push('start'); this.onSnapshot(this.snapshot()); }
+  appendStreaming(_messageId: string, text: string) { this.streamed.push(text); }
+  finishStreaming(messageId: string, text: string) { this.streamed.push('finish'); this.messageId = messageId; this.phase = 'speaking-browser'; this.plays.push([messageId, text]); this.onSnapshot(this.snapshot()); }
+  toggle(messageId: string, text: string) {
+    this.toggles.push([messageId, text]);
+    if (this.messageId === messageId && this.phase === 'paused') this.phase = 'speaking-browser';
+    else if (this.messageId === messageId && this.phase === 'speaking-browser') this.phase = 'paused';
+    else { this.messageId = messageId; this.phase = 'speaking-browser'; this.plays.push([messageId, text]); }
+    this.onSnapshot(this.snapshot());
+  }
   stop() { this.stops++; this.phase = 'idle'; this.onSnapshot(this.snapshot()); }
   dispose() { this.stop(); }
 } }));
@@ -172,6 +183,15 @@ describe('chat cancellation and recovery', () => {
       expect(speechOutputMock.instances[0].plays.at(-1)?.[1]).toBe('LIVE_ANSWER');
       expect(screen.getByRole('button', { name: 'End Live' })).toBeInTheDocument();
       expect(recognizer.stopped).toBe(false);
+      expect(screen.getByRole('button', { name: 'Pause' })).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: 'Pause' }));
+      expect(screen.queryByRole('button', { name: 'End Live' })).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Resume' })).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: 'Resume' }));
+      expect(screen.getByRole('button', { name: 'Stop' })).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: 'Stop' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Play' }));
+      expect(speechOutputMock.instances[0].plays.at(-1)?.[1]).toBe('LIVE_ANSWER');
     } finally {
       vi.useRealTimers();
     }

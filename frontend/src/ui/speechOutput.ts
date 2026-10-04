@@ -1,5 +1,6 @@
 export const PREFERRED_VOICE = 'en-US-BrianMultilingualNeural';
 const MAX_SEGMENT_LENGTH = 420;
+const FIRST_STREAM_SEGMENT_MIN = 72;
 
 export type VoiceEntry = { name: string; friendlyName: string; locale: string };
 export type SpeechPhase = 'idle' | 'warming' | 'loading' | 'speaking-edge' | 'speaking-browser' | 'paused' | 'ended' | 'error';
@@ -63,6 +64,9 @@ export class SpeechOutput {
   private generation = 0;
   private textParts: string[] = [];
   private part = 0;
+  private streaming = false;
+  private streamText = '';
+  private streamCursor = 0;
   private paused = false;
   private edgeFailed = false;
   private voiceReady = false;
@@ -260,6 +264,7 @@ export class SpeechOutput {
     this.stop(false);
     this.hasRetriedConnection = false;
     this.startWithBrian = this.voiceReady;
+    this.streaming = false;
     const visibleText = speechText(markdown);
     this.textParts = speechSegments(visibleText);
     if (!this.textParts.length) return;
@@ -272,6 +277,79 @@ export class SpeechOutput {
     this.unlock();
     if (!this.voiceReady) void this.warmup();
     void this.playPart(this.generation);
+  }
+
+  startStreaming(messageId: string) {
+    this.stop(false);
+    this.hasRetriedConnection = false;
+    this.startWithBrian = this.voiceReady;
+    this.textParts = [];
+    this.part = 0;
+    this.paused = false;
+    this.edgeFailed = false;
+    this.prepared = null;
+    this.streaming = true;
+    this.streamText = '';
+    this.streamCursor = 0;
+    this.generation++;
+    this.update({ messageId, phase: 'loading', detail: 'Waiting for the answer…' });
+    this.unlock();
+    if (!this.voiceReady) void this.warmup();
+  }
+
+  appendStreaming(messageId: string, markdown: string) {
+    if (!this.streaming || this.state.messageId !== messageId) return;
+    const nextText = speechText(markdown);
+    if (nextText.length > this.streamText.length) this.streamText = nextText;
+    this.queueStreamingParts(false);
+    if (!this.paused && this.state.detail === 'Waiting for more answer…' && this.part < this.textParts.length) {
+      void this.playPart(this.generation);
+    } else this.prepareStreamingNext(this.generation);
+  }
+
+  finishStreaming(messageId: string, markdown: string) {
+    if (!this.streaming || this.state.messageId !== messageId) return;
+    const finalText = speechText(markdown);
+    if (finalText.length > this.streamText.length) this.streamText = finalText;
+    this.queueStreamingParts(true);
+    this.streaming = false;
+    if (!this.textParts.length) {
+      this.generation++;
+      this.update({ phase: 'ended', detail: 'Finished.' });
+      return;
+    }
+    if (this.state.detail === 'Waiting for the answer…' || this.state.detail === 'Waiting for more answer…') {
+      void this.playPart(this.generation);
+    }
+  }
+
+  private queueStreamingParts(final: boolean) {
+    while (true) {
+      let from = this.streamCursor;
+      while (/\s/u.test(this.streamText[from] || '')) from++;
+      const remaining = this.streamText.slice(from);
+      if (!remaining) return;
+      let end = 0;
+      const sentence = /[.!?](?:["'”’)]*)(?:\s|$)/gu;
+      const firstSentence = sentence.exec(remaining);
+      if (firstSentence) end = firstSentence.index + firstSentence[0].length;
+      if (final) end = remaining.length;
+      else if (!end && remaining.length >= MAX_SEGMENT_LENGTH) {
+        const first = speechSegments(remaining)[0];
+        end = first ? remaining.indexOf(first) + first.length : 0;
+      } else if (!end && this.textParts.length === 0 && remaining.length >= FIRST_STREAM_SEGMENT_MIN) {
+        const bound = Math.min(120, remaining.length - 1);
+        const space = remaining.lastIndexOf(' ', bound);
+        if (space >= FIRST_STREAM_SEGMENT_MIN - 24) end = space;
+      }
+      if (!end) return;
+      const part = remaining.slice(0, end).trim();
+      this.streamCursor = from + end;
+      if (part) this.textParts.push(part);
+      if (!final && this.textParts.length === 1 && !this.engine) {
+        void this.playPart(this.generation);
+      }
+    }
   }
 
   toggle(messageId: string, markdown: string) {
@@ -288,6 +366,11 @@ export class SpeechOutput {
     if (generation !== this.generation || this.paused) return;
     const requestId = ++this.partRequestId;
     if (this.part >= this.textParts.length) {
+      if (this.streaming) {
+        this.engine = null;
+        this.update({ phase: 'loading', detail: 'Waiting for more answer…' });
+        return;
+      }
       this.generation++;
       this.cancelConnection();
       this.controllers.forEach(controller => controller.abort());
@@ -357,7 +440,15 @@ export class SpeechOutput {
     if (this.part + 1 < this.textParts.length && !this.prepared) {
       const nextPart = this.part + 1;
       this.prepared = { index: nextPart, result: this.requestAudio(this.textParts[nextPart]) };
+    } else if (this.streaming) {
+      this.prepareStreamingNext(generation);
     }
+  }
+
+  private prepareStreamingNext(generation: number) {
+    if (generation !== this.generation || !this.streaming || this.prepared || !this.voiceReady || this.edgeFailed) return;
+    const nextPart = this.engine === 'browser' ? Math.max(this.part + 1, this.browserLeadSegments) : this.part + 1;
+    if (nextPart < this.textParts.length) this.prepared = { index: nextPart, result: this.requestAudio(this.textParts[nextPart]) };
   }
 
   private playBrowserPart(generation: number) {
@@ -392,6 +483,7 @@ export class SpeechOutput {
     this.update({ phase: 'speaking-browser', detail: `${failure}Using ${browserName}. ${extra}` });
     this.synth.speak(utterance);
     if (this.part === 0) this.prepareHandoff(generation);
+    else this.prepareStreamingNext(generation);
   }
 
   private prepareHandoff(generation: number) {
@@ -491,6 +583,9 @@ export class SpeechOutput {
     this.generation++;
     this.cancelConnection();
     this.paused = false;
+    this.streaming = false;
+    this.streamText = '';
+    this.streamCursor = 0;
     this.controllers.forEach(controller => controller.abort());
     this.controllers.clear();
     this.prepared = null;

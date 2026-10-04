@@ -39,6 +39,41 @@ describe('speech output', () => {
     expect(segments.join(' ')).toBe(text);
   });
 
+  it('starts speaking a safe first chunk before the answer stream completes and queues later text', async () => {
+    const speechRequests: string[] = [];
+    const fetcher = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).endsWith('/api/voices')) return new Response(JSON.stringify({ voices: [brian] }), { status: 200 });
+      speechRequests.push(JSON.parse(init?.body as string).text as string);
+      return new Response(new Blob(['mp3']), { status: 200 });
+    }) as typeof fetch;
+    const audio = {
+      src: '', onended: null as (() => void) | null, onerror: null as (() => void) | null,
+      play: vi.fn(async () => {}), pause: vi.fn(), removeAttribute: vi.fn(), load: vi.fn(),
+    } as unknown as HTMLAudioElement;
+    const output = new SpeechOutput('/api', () => 'session-token', vi.fn(), {
+      fetcher, synth: null, makeAudio: () => audio,
+      createObjectURL: () => 'blob:live-stream', revokeObjectURL: vi.fn(),
+    });
+    await output.warmup();
+    output.startStreaming('live-answer');
+    const firstText = 'The assistant starts talking before it has produced the whole answer and keeps going';
+    output.appendStreaming('live-answer', firstText);
+    const firstSegment = firstText.slice(0, firstText.lastIndexOf(' ', firstText.length - 1)).trim();
+    await waitFor(() => expect(speechRequests).toEqual([firstSegment]));
+    expect(output.snapshot().phase).toBe('speaking-edge');
+
+    const completeText = firstText + ' and then it finishes the rest.';
+    output.appendStreaming('live-answer', completeText);
+    await waitFor(() => expect(speechRequests).toHaveLength(2));
+    expect(speechRequests.join(' ')).toBe(completeText);
+    output.finishStreaming('live-answer', completeText);
+    (audio.onended as (() => void) | null)?.();
+    await waitFor(() => expect(output.snapshot().phase).toBe('speaking-edge'));
+    expect(output.snapshot().messageId).toBe('live-answer');
+    output.stop();
+    output.dispose();
+  });
+
   it('selects the exact Brian service voice and never substitutes another cloud voice', () => {
     expect(preferredVoice([{ ...brian, locale: 'en-GB' }])).toBeUndefined();
     expect(preferredVoice([{ ...brian, name: 'en-US-AndrewMultilingualNeural' }])).toBeUndefined();
