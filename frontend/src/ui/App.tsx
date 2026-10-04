@@ -10,7 +10,7 @@ type Message = {
   id: string;
   role: 'user' | 'assistant';
   content: string;
-  status?: 'pending' | 'complete' | 'interrupted';
+  status?: 'pending' | 'complete' | 'interrupted' | 'error';
 };
 
 const API = import.meta.env.VITE_API_URL || 'http://localhost:8080';
@@ -39,25 +39,27 @@ function completedTurns(items: Message[]): Message[] {
     if (message.role === 'user') {
       // Include an interrupted user turn even when generation stopped before text arrived.
       if (pendingUser) {
-        turns.push(pendingUser);
-        if (pendingUser.status === 'interrupted') turns.push({ id: `${pendingUser.id}-cutoff`, role: 'assistant', content: '[Interrupted before any answer text was displayed.]' });
+        if (pendingUser.status === 'interrupted') {
+          turns.push(pendingUser, { id: `${pendingUser.id}-cutoff`, role: 'assistant', content: '[Interrupted before any answer text was displayed.]' });
+        } else if (!pendingUser.status) turns.push(pendingUser);
       }
       pendingUser = message;
     } else {
-      if (pendingUser?.content.trim()) {
-        turns.push(pendingUser);
-        if (message.status === 'complete' && message.content.trim()) {
-          turns.push(message);
-        } else if (message.status === 'interrupted') {
-          turns.push({ ...message, content: `[Interrupted. The answer ended at this exact visible cutoff; no later text was shown.]\n\n${message.content}` });
-        }
+      if (pendingUser?.content.trim() && message.status === 'complete' && message.content.trim()) {
+        turns.push(pendingUser, message);
+      } else if (pendingUser?.content.trim() && message.status === 'interrupted') {
+        const cutoff = message.content.trim()
+          ? `[Interrupted. The answer ended at this exact visible cutoff; no later text was shown.]\n\n${message.content}`
+          : '[Interrupted before any answer text was displayed.]';
+        turns.push(pendingUser, { ...message, content: cutoff });
       }
       pendingUser = undefined;
     }
   }
   if (pendingUser?.content.trim()) {
-    turns.push(pendingUser);
-    if (pendingUser.status === 'interrupted') turns.push({ id: `${pendingUser.id}-cutoff`, role: 'assistant', content: '[Interrupted before any answer text was displayed.]' });
+    if (pendingUser.status === 'interrupted') {
+      turns.push(pendingUser, { id: `${pendingUser.id}-cutoff`, role: 'assistant', content: '[Interrupted before any answer text was displayed.]' });
+    } else if (!pendingUser.status) turns.push(pendingUser);
   }
   return turns;
 }
@@ -384,14 +386,14 @@ export default function App() {
       if (canceled) conversationId.current = crypto.randomUUID();
       else setError((x as Error).message);
       setMessages(cur => {
-        const hasPartialAnswer = cur.some(m => m.id === assistantId && m.content.trim());
         return cur.flatMap(m => {
-          if ((x as Error).message === 'Your session expired. Enter the code again.' && m.id === userId) return [];
-          if (m.id === userId && canceled) {
-            return [{ ...m, status: 'interrupted' as const }];
+          if ((x as Error).message === 'Your session expired. Enter the code again.' && (m.id === userId || m.id === assistantId)) return [];
+          if (m.id === userId) {
+            return [{ ...m, status: canceled ? 'interrupted' as const : 'error' as const }];
           }
           if (m.id !== assistantId) return [m];
-          return m.content.trim() ? [{ ...m, status: 'interrupted' as const }] : [];
+          if (canceled && !m.content.trim()) return [];
+          return [{ ...m, status: canceled ? 'interrupted' as const : 'error' as const }];
         });
       });
     } finally {
@@ -494,7 +496,7 @@ export default function App() {
           <button key={s} onClick={() => send(undefined, s)}>{s}<span>↗</span></button>
         )}</div>
       </div> : messages.map((m, index) =>
-        <article className={'message ' + m.role} key={m.id}>
+        <article className={'message ' + m.role + (m.status === 'error' ? ' stale' : '')} key={m.id}>
           <div className="avatar">{m.role === 'user' ? 'Y' : '✳'}</div>
           <div className="content">
             {m.role === 'assistant' && m.content
@@ -511,6 +513,7 @@ export default function App() {
             </div>}
             {m.role === 'user' && m.status === 'interrupted' && messages[index + 1]?.status !== 'interrupted' && <span className="turn-status"><strong>Interrupted</strong> before a response</span>}
             {m.role === 'assistant' && m.status === 'interrupted' && <span className="turn-status"><strong>Interrupted</strong></span>}
+            {m.role === 'assistant' && m.status === 'error' && <span className="turn-status"><strong>Error</strong></span>}
           </div>
         </article>
       )}

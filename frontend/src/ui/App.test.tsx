@@ -296,6 +296,34 @@ describe('chat cancellation and recovery', () => {
     ]);
   });
 
+  it('dims and excludes both sides of a turn when the request fails', async () => {
+    fetchMock.mockResolvedValueOnce(eventStream({ delta: 'EARLIER_ANSWER' }));
+    fetchMock.mockResolvedValueOnce(eventStream({ delta: 'PARTIAL_BEFORE_ERROR' }, { error: 'Provider failed.' }));
+    fetchMock.mockResolvedValueOnce(eventStream({ delta: 'RECOVERED_ANSWER' }));
+    const user = userEvent.setup();
+    render(<App />);
+    const textbox = screen.getByRole('textbox', { name: 'Message' });
+    await user.type(textbox, 'Earlier question');
+    await user.click(screen.getByRole('button', { name: '↑' }));
+    expect(await screen.findByText('EARLIER_ANSWER')).toBeInTheDocument();
+
+    await user.type(textbox, 'Question that fails');
+    await user.click(screen.getByRole('button', { name: '↑' }));
+    expect(await screen.findByText('Provider failed.')).toBeInTheDocument();
+    expect(screen.getByText('Question that fails').closest('article')).toHaveClass('stale');
+    expect(screen.getByText('PARTIAL_BEFORE_ERROR').closest('article')).toHaveClass('stale');
+    expect(screen.getByText('Error').closest('article')).toHaveClass('stale');
+
+    await user.type(textbox, 'Try again with context');
+    await user.click(screen.getByRole('button', { name: '↑' }));
+    expect(await screen.findByText('RECOVERED_ANSWER')).toBeInTheDocument();
+    expect(chatPayload(fetchMock, 2).messages).toEqual([
+      { role: 'user', content: 'Earlier question' },
+      { role: 'assistant', content: 'EARLIER_ANSWER' },
+      { role: 'user', content: 'Try again with context' },
+    ]);
+  });
+
   it('asks for the invitation code on composer focus when the stored session expired', async () => {
     sessionCheck.mockResolvedValueOnce(new Response('{}', { status: 401 }));
     const user = userEvent.setup();
