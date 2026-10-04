@@ -3,6 +3,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { accessibleTextColor, COLOR_CSS_VARIABLES, COLOR_TARGETS, ColorPreferences, ColorTarget, contrastRatio, DEFAULT_COLORS, initialScale, initialTheme, parseColor, readSavedColors, Theme, UI_TOOL_DECLARATIONS, UiAction, validateUiAction } from './uiTools';
 import { SpeechOutput, SpeechSnapshot } from './speechOutput';
+import { SpeechInput } from './speechInput';
 import { executeNativeUiTool, WebMCPContext, WebMCPTool } from './webmcp';
 
 type Message = {
@@ -56,6 +57,8 @@ export default function App() {
   const gateRequestPending = useRef(false);
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
+  const [dictationStatus, setDictationStatus] = useState('');
+  const [correction, setCorrection] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [webmcp, setWebmcp] = useState('Checking WebMCP availability…');
@@ -66,6 +69,9 @@ export default function App() {
   const [colorChoice, setColorChoice] = useState('#f7f7f5');
   const [speech, setSpeech] = useState<SpeechSnapshot>({ messageId: null, phase: 'idle', service: 'idle', detail: '' });
   const speechOutput = useRef<SpeechOutput | null>(null);
+  const speechInput = useRef<SpeechInput | null>(null);
+  const dictationBase = useRef('');
+  const correctionTimer = useRef<number | undefined>(undefined);
   const abort = useRef<AbortController | null>(null);
   const sessionCheck = useRef<Promise<void> | null>(null);
   const tail = useRef<HTMLDivElement>(null);
@@ -76,9 +82,15 @@ export default function App() {
 
   useEffect(() => {
     if (token) void speechOutput.current?.warmup();
-    else speechOutput.current?.stop();
+    else {
+      speechOutput.current?.stop();
+      speechInput.current?.stop();
+      speechInput.current = null;
+      setDictationStatus('');
+    }
   }, [token]);
   useEffect(() => () => speechOutput.current?.dispose(), []);
+  useEffect(() => () => { speechInput.current?.stop(); window.clearTimeout(correctionTimer.current); }, []);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -267,6 +279,12 @@ export default function App() {
     const body = text.trim();
     if (!body || abort.current || !token) return;
 
+    speechInput.current?.stop();
+    speechInput.current = null;
+    setDictationStatus('');
+    setCorrection('');
+    window.clearTimeout(correctionTimer.current);
+
     setInput('');
     setError('');
     const assistantId = crypto.randomUUID();
@@ -371,6 +389,37 @@ export default function App() {
     }
   }
 
+  function startDictation() {
+    speechInput.current?.stop();
+    speechOutput.current?.stop();
+    dictationBase.current = input;
+    setError('');
+    const inputController = new SpeechInput(API, () => sessionStorage.getItem('chat-token') || '', {
+      onStatus: setDictationStatus,
+      onTranscript: update => {
+        const dictated = [update.committed, update.interim].filter(Boolean).join(' ').slice(0, Math.max(0, 12000 - dictationBase.current.length));
+        setInput(dictationBase.current && dictated
+          ? dictationBase.current + (/\s$/.test(dictationBase.current) ? '' : ' ') + dictated
+          : dictationBase.current || dictated);
+        if (update.corrected) {
+          setCorrection(update.corrected);
+          window.clearTimeout(correctionTimer.current);
+          correctionTimer.current = window.setTimeout(() => setCorrection(''), 5000);
+        }
+      },
+    });
+    speechInput.current = inputController;
+    void inputController.start();
+  }
+
+  function interruptAndDictate() {
+    if (busy) abort.current?.abort();
+    speechOutput.current?.stop();
+    startDictation();
+  }
+
+  const answerSpeaking = speech.phase === 'loading' || speech.phase === 'speaking-edge' || speech.phase === 'speaking-browser' || speech.phase === 'paused';
+
   if (!token) {
     return <main className="gate">
       <div className="mark">✳</div>
@@ -452,10 +501,13 @@ export default function App() {
           onChange={e => setInput(e.target.value)}
           onFocus={() => { void checkSession(); }}
           onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }} />
-        {busy
-          ? <button type="button" className="stop" onClick={() => abort.current?.abort()}>Stop</button>
-          : <button type="submit" disabled={!input.trim()}>↑</button>}
+        <button type="button" className="mic" onClick={interruptAndDictate} disabled={!token} aria-label={busy || answerSpeaking ? 'Interrupt' : 'Mic'} title={busy || answerSpeaking ? 'Interrupt and dictate' : 'Dictate'}>
+          {busy || answerSpeaking ? 'Interrupt' : 'Mic'}
+        </button>
+        <button type="submit" disabled={!input.trim() || busy}>↑</button>
       </form>
+      {dictationStatus && <p className="dictation-status" role="status">{dictationStatus}</p>}
+      {correction && <p className="correction" role="status"><span>Corrected:</span> <mark>{correction}</mark></p>}
       <p className="footnote">Enter to send · Shift + Enter for a new line</p>
     </footer>
   </main>;

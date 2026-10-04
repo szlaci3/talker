@@ -230,6 +230,40 @@ async def session_check_route(request):
     return web.json_response({"ok": True}, headers={"Cache-Control": "no-store"})
 
 
+async def live_token_route(request):
+    """Issue a single-use, model-constrained token for browser Live transcription."""
+    authenticated_session(request)
+    api_key = secret("GOOGLE_API_KEY", 12)
+    expires = datetime.now(timezone.utc).timestamp() + 30 * 60
+    expires_at = datetime.fromtimestamp(expires, timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+    payload = {
+        "uses": 1,
+        "expireTime": expires_at,
+        "newSessionExpireTime": datetime.fromtimestamp(time.time() + 60, timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
+        "liveConnectConstraints": {
+            "model": "models/gemini-3.5-transcribe-live",
+            "config": {
+                "responseModalities": ["TEXT"],
+                "inputAudioTranscription": {"languageCodes": []},
+                "sessionResumption": {},
+            },
+        },
+    }
+    try:
+        async with ClientSession(timeout=ClientTimeout(total=15)) as client:
+            async with client.post(
+                "https://generativelanguage.googleapis.com/v1beta/auth_tokens",
+                headers={"x-goog-api-key": api_key, "Content-Type": "application/json"},
+                json=payload,
+            ) as response:
+                result = await response.json()
+                if response.status >= 400 or not isinstance(result.get("name"), str):
+                    raise ValueError("Token provisioning failed")
+    except Exception:
+        raise web.HTTPBadGateway(text='{"error":"Gemini Live could not start. English browser recognition will be used if available."}', content_type="application/json")
+    return web.json_response({"token": result["name"]}, headers={"Cache-Control": "no-store"})
+
+
 async def health(request):
     provider = os.getenv("CHAT_PROVIDER", "antigravity").strip().lower()
     configured = provider == "mock" or (provider in ("google", "gemini") and bool(os.getenv("GOOGLE_API_KEY") and os.getenv("GOOGLE_MODEL"))) or (provider == "antigravity" and bool(os.getenv("GOOGLE_API_KEY")))
@@ -603,6 +637,7 @@ def create_app():
     app.router.add_get("/healthz", health)
     app.router.add_post("/api/session", session_route)
     app.router.add_get("/api/session", session_check_route)
+    app.router.add_post("/api/live-token", live_token_route)
     app.router.add_post("/api/chat", chat_route)
     app.router.add_post("/api/ui-tool-result", ui_tool_result_route)
     app.router.add_get("/api/voices", speech_voices_route)

@@ -21,6 +21,36 @@ class FakeCommunicate:
         yield {"type": "audio", "data": b"fake-mp3"}
 
 
+class FakeTokenResponse:
+    status = 200
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_args):
+        return False
+
+    async def json(self):
+        return {"name": "single-use-live-token"}
+
+
+class FakeTokenClient:
+    calls = []
+
+    def __init__(self, **_kwargs):
+        pass
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_args):
+        return False
+
+    def post(self, url, **kwargs):
+        self.calls.append((url, kwargs))
+        return FakeTokenResponse()
+
+
 async def fake_list_voices():
     return [
         {"ShortName": server.PREFERRED_EDGE_VOICE, "Locale": "en-US", "FriendlyName": "Brian"},
@@ -32,6 +62,7 @@ class SpeechRoutesTest(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.env = patch.dict(os.environ, {"SESSION_SECRET": "test-secret-value-with-at-least-32-bytes", "ALLOWED_ORIGINS": "http://localhost:5173"})
         self.env.start()
+        FakeTokenClient.calls.clear()
         FakeCommunicate.calls.clear()
         server.speech_catalogue = []
         server.speech_catalogue_at = 0
@@ -80,6 +111,23 @@ class SpeechRoutesTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await first.read(), b"fake-mp3")
         self.assertEqual(await second.read(), b"fake-mp3")
         self.assertEqual(len(FakeCommunicate.calls), 1)
+
+    async def test_live_token_is_authenticated_constrained_and_keeps_api_key_server_side(self):
+        with patch.dict(os.environ, {"GOOGLE_API_KEY": "server-only-test-google-key"}), patch.object(server, "ClientSession", FakeTokenClient):
+            denied = await self.client.post("/api/live-token")
+            self.assertEqual(denied.status, 401)
+            response = await self.client.post("/api/live-token", headers=self.headers())
+        self.assertEqual(response.status, 200)
+        self.assertEqual(await response.json(), {"token": "single-use-live-token"})
+        url, request = FakeTokenClient.calls[0]
+        self.assertEqual(url, "https://generativelanguage.googleapis.com/v1beta/auth_tokens")
+        self.assertEqual(request["headers"]["x-goog-api-key"], "server-only-test-google-key")
+        self.assertEqual(request["json"]["uses"], 1)
+        constraints = request["json"]["liveConnectConstraints"]
+        self.assertEqual(constraints["model"], "models/gemini-3.5-transcribe-live")
+        self.assertEqual(constraints["config"]["responseModalities"], ["TEXT"])
+        self.assertEqual(constraints["config"]["inputAudioTranscription"]["languageCodes"], [])
+        self.assertIn("sessionResumption", constraints["config"])
 
 
 if __name__ == "__main__":

@@ -3,6 +3,18 @@ import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import App from './App';
 
+const speechInputMock = vi.hoisted(() => ({ instances: [] as Array<{ callbacks: { onTranscript: (update: { committed: string; interim: string; corrected: string }) => void; onStatus: (status: string) => void }; stopped: boolean }> }));
+vi.mock('./speechInput', () => ({ SpeechInput: class {
+  readonly callbacks: typeof speechInputMock.instances[number]['callbacks'];
+  stopped = false;
+  constructor(_api: string, _getToken: () => string, callbacks: typeof speechInputMock.instances[number]['callbacks']) {
+    this.callbacks = callbacks;
+    speechInputMock.instances.push(this);
+  }
+  async start() { this.callbacks.onStatus('Listening'); }
+  stop() { this.stopped = true; }
+} }));
+
 function eventStream(...events: Array<Record<string, unknown>>) {
   const encoder = new TextEncoder();
   const body = new ReadableStream<Uint8Array>({
@@ -99,9 +111,25 @@ describe('chat cancellation and recovery', () => {
   let sessionCheck: ReturnType<typeof vi.fn<() => Promise<Response>>>;
 
   beforeEach(() => {
+    speechInputMock.instances = [];
     sessionStorage.setItem('chat-token', 'test-session-token');
     sessionCheck = vi.fn(async () => new Response('{}', { status: 200 }));
     fetchMock = mockApi(sessionCheck);
+  });
+
+  it('appends live dictation to a typed draft, highlights corrections, and ends capture before sending', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    const textbox = screen.getByRole('textbox', { name: 'Message' });
+    await user.type(textbox, 'Please review: ');
+    await user.click(screen.getByRole('button', { name: 'Mic' }));
+    speechInputMock.instances[0].callbacks.onTranscript({ committed: 'the old phrase', interim: '', corrected: 'the new phrase' });
+    await waitFor(() => expect(textbox).toHaveValue('Please review: the old phrase'));
+    expect(screen.getByText('the new phrase').tagName).toBe('MARK');
+    fetchMock.mockResolvedValueOnce(eventStream({ delta: 'Reviewed.' }));
+    await user.click(screen.getByRole('button', { name: '↑' }));
+    expect(speechInputMock.instances[0].stopped).toBe(true);
+    expect(chatPayload(fetchMock, 0).messages.at(-1)?.content).toBe('Please review: the old phrase');
   });
 
   it('marks a pre-token cancellation and excludes that unanswered question from the next request', async () => {
@@ -118,7 +146,7 @@ describe('chat cancellation and recovery', () => {
     render(<App />);
     await user.type(screen.getByRole('textbox', { name: 'Message' }), 'Explain the causes in detail');
     await user.click(screen.getByRole('button', { name: '↑' }));
-    await user.click(await screen.findByRole('button', { name: 'Stop' }));
+    await user.click(await screen.findByRole('button', { name: 'Interrupt' }));
 
     expect(await screen.findByText('Canceled before a response')).toBeInTheDocument();
     await user.type(screen.getByRole('textbox', { name: 'Message' }), 'How many r letters are in strawberry?');
@@ -148,7 +176,7 @@ describe('chat cancellation and recovery', () => {
     await user.type(textbox, 'Give a detailed account of the consequences');
     await user.click(screen.getByRole('button', { name: '↑' }));
     expect(await screen.findByText('PARTIAL_ANSWER')).toBeInTheDocument();
-    await user.click(await screen.findByRole('button', { name: 'Stop' }));
+    await user.click(await screen.findByRole('button', { name: 'Interrupt' }));
     expect(await screen.findByText('Stopped')).toBeInTheDocument();
     expect(screen.getAllByText('Stopped')).toHaveLength(1);
     expect(screen.queryByText('Canceled before a response')).not.toBeInTheDocument();
