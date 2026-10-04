@@ -59,7 +59,7 @@ export class SpeechInput {
     this.resumeHandle = '';
     this.reconnects = 0;
     this.liveReady = false;
-    this.callbacks.onStatus('Listening');
+    this.callbacks.onStatus('Connecting to Gemini Live…');
     try {
       if (!navigator.mediaDevices?.getUserMedia || typeof WebSocket === 'undefined') throw new Error('Live audio is unavailable in this browser.');
       this.stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
@@ -116,31 +116,50 @@ export class SpeechInput {
     if (!token || !this.isCurrent(id)) throw new Error('Live session token was unavailable.');
     await new Promise<void>((resolve, reject) => {
       const socket = new WebSocket(`${LIVE_SOCKET}?access_token=${encodeURIComponent(token)}`);
+      // Gemini can send JSON in binary frames. Decode synchronously to preserve order.
+      socket.binaryType = 'arraybuffer';
       this.socket = socket;
       let ready = false;
-      const setupTimer = window.setTimeout(() => { if (!ready) reject(new Error('Gemini Live setup timed out.')); }, 12000);
-      socket.onopen = () => socket.send(JSON.stringify({ setup: {
+      let failed = false;
+      const isCurrentSocket = () => this.isCurrent(id) && this.socket === socket && !failed;
+      const fail = (error: Error) => {
+        if (!isCurrentSocket()) return;
+        failed = true;
+        clearTimeout(setupTimer);
+        if (ready) this.fallback(error, id);
+        else reject(error);
+      };
+      const setupTimer = window.setTimeout(() => {
+        if (!ready) fail(new Error('Gemini Live setup timed out.'));
+      }, 12000);
+      socket.onopen = () => { if (isCurrentSocket()) socket.send(JSON.stringify({ setup: {
         model: LIVE_MODEL,
         generationConfig: { responseModalities: ['TEXT'] },
         inputAudioTranscription: { languageCodes: [] },
         sessionResumption: this.resumeHandle ? { handle: this.resumeHandle } : {},
-      } }));
+      } })); };
       socket.onmessage = event => {
+        if (!isCurrentSocket()) return;
         let message: Record<string, any>;
-        try { message = JSON.parse(String(event.data)); } catch { return; }
-        if (message.error) {
-          const failure = new Error(message.error.message || 'Gemini Live rejected the session.');
-          clearTimeout(setupTimer);
-          if (ready) this.fallback(failure, id);
-          else reject(failure);
+        try {
+          const text = event.data instanceof ArrayBuffer ? new TextDecoder().decode(event.data) : event.data;
+          message = JSON.parse(text);
+          if (!message || typeof message !== 'object' || Array.isArray(message)) throw new Error();
+        } catch {
+          fail(new Error('Gemini Live returned an unreadable message.'));
           return;
         }
-        if (message.setupComplete) {
+        if (message.error) {
+          fail(new Error(message.error.message || 'Gemini Live rejected the session.'));
+          return;
+        }
+        if (message.setupComplete && !ready) {
           ready = true;
           this.liveReady = true;
           clearTimeout(setupTimer);
           this.reconnects = 0;
           for (const audio of this.queuedAudio.splice(0)) socket.send(audio);
+          this.callbacks.onStatus('Listening');
           resolve();
         }
         const resume = message.sessionResumptionUpdate;
@@ -161,10 +180,10 @@ export class SpeechInput {
           this.publish(correction);
         }
       };
-      socket.onerror = () => { if (!ready) { clearTimeout(setupTimer); reject(new Error('Gemini Live connection failed.')); } };
+      socket.onerror = () => fail(new Error('Gemini Live connection failed.'));
       socket.onclose = () => {
         clearTimeout(setupTimer);
-        if (!this.isCurrent(id) || this.socket !== socket) return;
+        if (!isCurrentSocket()) return;
         if (!ready) {
           this.socket = null;
           reject(new Error('Gemini Live closed before session setup completed.'));
@@ -208,9 +227,11 @@ export class SpeechInput {
 
   private fallback(error: unknown, id: number): void {
     if (!this.isCurrent(id)) return;
-    this.socket?.close();
+    const socket = this.socket;
     this.socket = null;
+    socket?.close();
     this.liveReady = false;
+    this.queuedAudio = [];
     this.processor?.disconnect();
     this.source?.disconnect();
     this.silent?.disconnect();
