@@ -56,6 +56,7 @@ describe('Gemini Live dictation', () => {
   const stream = { getTracks: () => [track] } as unknown as MediaStream;
   const statuses: string[] = [];
   const transcripts: TranscriptUpdate[] = [];
+  const speechEvents: string[] = [];
 
   afterEach(() => {
     vi.useRealTimers();
@@ -63,6 +64,7 @@ describe('Gemini Live dictation', () => {
     vi.restoreAllMocks();
     statuses.length = 0;
     transcripts.length = 0;
+    speechEvents.length = 0;
     track.stop.mockClear();
     FakeSocket.setupReply = { setupComplete: {} };
     FakeSocket.binaryFrames = true;
@@ -77,9 +79,36 @@ describe('Gemini Live dictation', () => {
     Object.defineProperty(navigator, 'mediaDevices', { configurable: true, value: { getUserMedia: vi.fn(async () => stream) } });
     const controller = new SpeechInput('http://localhost:8080', () => 'session-token', {
       onStatus: value => statuses.push(value), onTranscript: value => transcripts.push(value),
+      onSpeechStarted: () => speechEvents.push('started'),
+      onSpeechEnded: elapsed => speechEvents.push(`ended:${elapsed ?? ''}`),
     });
     return { controller };
   }
+
+  it('detects speech boundaries, sends the final audio packet, and flushes Gemini at the end of a phrase', async () => {
+    const { controller } = setup();
+    await controller.start();
+    const audio = FakeAudioContext.latest;
+    const frame = (value: number) => audio.processor.onaudioprocess?.({
+      inputBuffer: { getChannelData: () => new Float32Array(4800).fill(value) },
+    } as unknown as AudioProcessingEvent);
+    const before = FakeSocket.latest.sent.length;
+    frame(.2);
+    frame(.2);
+    expect(speechEvents).toEqual(['started']);
+    frame(0);
+    expect(speechEvents).toEqual(['started']);
+    frame(0);
+    frame(0);
+    frame(0);
+    frame(0);
+    frame(0);
+    expect(speechEvents).toEqual(['started', 'ended:600']);
+    const packets = FakeSocket.latest.sent.slice(before).map(packet => JSON.parse(packet));
+    expect(packets.at(-1)).toEqual({ realtimeInput: { audioStreamEnd: true } });
+    expect(packets.filter(packet => packet.realtimeInput.audio)).toHaveLength(8);
+    controller.stop();
+  });
 
   it.each([true, false])('handles binary frames=%s for setup and transcripts, streams PCM, and releases the microphone', async binary => {
     FakeSocket.binaryFrames = binary;

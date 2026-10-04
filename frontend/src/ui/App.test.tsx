@@ -4,8 +4,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import App from './App';
 import type { TranscriptUpdate } from './speechInput';
 
-const speechInputMock = vi.hoisted(() => ({ instances: [] as Array<{ callbacks: { onTranscript: (update: TranscriptUpdate) => void; onStatus: (status: string) => void }; stopped: boolean }> }));
-const speechOutputMock = vi.hoisted(() => ({ instances: [] as Array<{ phase: string; messageId: string | null }> }));
+const speechInputMock = vi.hoisted(() => ({ instances: [] as Array<{ callbacks: { onTranscript: (update: TranscriptUpdate) => void; onStatus: (status: string) => void; onSpeechStarted?: () => void; onSpeechEnded?: (elapsed?: number) => void }; stopped: boolean }> }));
+const speechOutputMock = vi.hoisted(() => ({ instances: [] as Array<{ phase: string; messageId: string | null; plays: Array<[string, string]>; stops: number }> }));
 vi.mock('./speechInput', () => ({ SpeechInput: class {
   readonly callbacks: typeof speechInputMock.instances[number]['callbacks'];
   stopped = false;
@@ -15,17 +15,21 @@ vi.mock('./speechInput', () => ({ SpeechInput: class {
   }
   async start() { this.callbacks.onStatus('Gemini is listening'); }
   stop() { this.stopped = true; }
+  resetTranscript() { this.callbacks.onTranscript({ committed: '', interim: '', corrected: null }); }
 } }));
 vi.mock('./speechOutput', () => ({ SpeechOutput: class {
   phase = 'idle';
   messageId: string | null = null;
+  plays: Array<[string, string]> = [];
+  stops = 0;
   constructor(_api: string, _getToken: () => string, private onSnapshot: (value: { messageId: string | null; phase: string; service: string; detail: string }) => void) {
     speechOutputMock.instances.push(this);
   }
   snapshot() { return { messageId: this.messageId, phase: this.phase, service: 'idle', detail: '' }; }
   async warmup() {}
+  play(messageId: string, text: string) { this.messageId = messageId; this.phase = 'speaking-browser'; this.plays.push([messageId, text]); this.onSnapshot(this.snapshot()); }
   toggle(messageId: string) { this.messageId = messageId; this.phase = 'speaking-browser'; this.onSnapshot(this.snapshot()); }
-  stop() { this.phase = 'idle'; this.onSnapshot(this.snapshot()); }
+  stop() { this.stops++; this.phase = 'idle'; this.onSnapshot(this.snapshot()); }
   dispose() { this.stop(); }
 } }));
 
@@ -144,6 +148,70 @@ describe('chat cancellation and recovery', () => {
     expect(row.children[1]).toHaveTextContent('Gemini is listening');
   });
 
+  it('keeps Live active, auto-sends after four seconds of silence, counts down, and speaks the full answer', async () => {
+    fetchMock.mockResolvedValueOnce(eventStream({ delta: 'LIVE_ANSWER' }));
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole('button', { name: 'Start Live' }));
+    const recognizer = speechInputMock.instances[0];
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date'] });
+    act(() => {
+      recognizer.callbacks.onTranscript({ committed: '', interim: 'What is the weather?', corrected: null });
+      recognizer.callbacks.onSpeechEnded?.(0);
+    });
+    expect(screen.getByRole('textbox', { name: 'Message' })).toHaveValue('What is the weather?');
+    try {
+      await act(async () => { await vi.advanceTimersByTimeAsync(2000); });
+      expect(document.querySelector('.dictation-status')).toHaveTextContent('Sending in 2…');
+      // Recognition revisions update the draft but do not restart the silence countdown.
+      act(() => recognizer.callbacks.onTranscript({ committed: '', interim: 'What is the weather like?', corrected: null }));
+      await act(async () => { await vi.advanceTimersByTimeAsync(2000); });
+      expect(chatPayload(fetchMock, 0).messages.at(-1)?.content).toBe('What is the weather like?');
+      expect(await screen.findByText('LIVE_ANSWER')).toBeInTheDocument();
+      expect(speechOutputMock.instances[0].plays.at(-1)?.[1]).toBe('LIVE_ANSWER');
+      expect(screen.getByRole('button', { name: 'End Live' })).toBeInTheDocument();
+      expect(recognizer.stopped).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('lets speech interrupt playback, keeps the complete answer, and uses the next utterance as a new turn', async () => {
+    fetchMock.mockResolvedValueOnce(eventStream({ delta: 'COMPLETE_LIVE_ANSWER' }));
+    fetchMock.mockResolvedValueOnce(eventStream({ delta: 'SECOND_LIVE_ANSWER' }));
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole('button', { name: 'Start Live' }));
+    const recognizer = speechInputMock.instances[0];
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date'] });
+    act(() => {
+      recognizer.callbacks.onTranscript({ committed: '', interim: 'First question', corrected: null });
+      recognizer.callbacks.onSpeechEnded?.(0);
+    });
+    try {
+      await act(async () => { await vi.advanceTimersByTimeAsync(4000); });
+      expect(await screen.findByText('COMPLETE_LIVE_ANSWER')).toBeInTheDocument();
+      expect(speechOutputMock.instances[0].plays).toHaveLength(1);
+      act(() => recognizer.callbacks.onSpeechStarted?.());
+      expect(speechOutputMock.instances[0].stops).toBeGreaterThan(0);
+      expect(screen.getByText('COMPLETE_LIVE_ANSWER').closest('article')).not.toHaveTextContent('Interrupted');
+      act(() => {
+        recognizer.callbacks.onTranscript({ committed: '', interim: 'Next question', corrected: null });
+        recognizer.callbacks.onSpeechEnded?.(0);
+      });
+      await act(async () => { await vi.advanceTimersByTimeAsync(4000); });
+      expect(chatPayload(fetchMock, 1).messages).toEqual([
+        { role: 'user', content: 'First question' },
+        { role: 'assistant', content: 'COMPLETE_LIVE_ANSWER' },
+        { role: 'user', content: 'Next question' },
+      ]);
+      expect(await screen.findByText('SECOND_LIVE_ANSWER')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'End Live' })).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('appends live dictation to a typed draft, highlights corrections, and ends capture before sending', async () => {
     const user = userEvent.setup();
     render(<App />);
@@ -259,7 +327,7 @@ describe('chat cancellation and recovery', () => {
     await user.click(await screen.findByRole('button', { name: 'Interrupt' }));
 
     expect(await screen.findByText('Interrupted')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Mute' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Mic' })).toBeInTheDocument();
     await user.type(screen.getByRole('textbox', { name: 'Message' }), 'How many r letters are in strawberry?');
     await user.click(screen.getByRole('button', { name: '↑' }));
     expect(await screen.findByText('STRAWBERRY_REPLY')).toBeInTheDocument();

@@ -14,6 +14,7 @@ type Message = {
 };
 
 const API = import.meta.env.VITE_API_URL || 'http://localhost:8080';
+const LIVE_SILENCE_MS = 4000;
 const suggestions = ['What can you help me with?', 'Explain a tricky idea simply', 'Help me plan a small project'];
 const WEBMCP_FALLBACK = 'Standard chat (no WebMCP)';
 
@@ -83,6 +84,8 @@ export default function App() {
   const [input, setInput] = useState('');
   const [dictationStatus, setDictationStatus] = useState('');
   const [dictationActive, setDictationActive] = useState(false);
+  const [liveActive, setLiveActive] = useState(false);
+  const [liveCountdown, setLiveCountdown] = useState<number | null>(null);
   const [correction, setCorrection] = useState<TranscriptCorrection | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -95,6 +98,10 @@ export default function App() {
   const [speech, setSpeech] = useState<SpeechSnapshot>({ messageId: null, phase: 'idle', service: 'idle', detail: '' });
   const speechOutput = useRef<SpeechOutput | null>(null);
   const speechInput = useRef<SpeechInput | null>(null);
+  const liveActiveRef = useRef(false);
+  const latestInput = useRef('');
+  const sendRef = useRef<((e?: FormEvent, text?: string) => Promise<void>) | null>(null);
+  const liveSilenceTimer = useRef<number | null>(null);
   const composerField = useRef<HTMLDivElement>(null);
   const composerTextarea = useRef<HTMLTextAreaElement>(null);
   const composerPreview = useRef<HTMLDivElement>(null);
@@ -114,12 +121,19 @@ export default function App() {
       speechOutput.current?.stop();
       speechInput.current?.stop();
       speechInput.current = null;
+      liveActiveRef.current = false;
+      clearLiveSilenceTimer();
+      setLiveActive(false);
       setDictationActive(false);
       setDictationStatus('');
     }
   }, [token]);
   useEffect(() => () => speechOutput.current?.dispose(), []);
-  useEffect(() => () => { speechInput.current?.stop(); window.clearTimeout(correctionTimer.current); }, []);
+  useEffect(() => () => {
+    speechInput.current?.stop();
+    window.clearTimeout(correctionTimer.current);
+    if (liveSilenceTimer.current !== null) window.clearInterval(liveSilenceTimer.current);
+  }, []);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -147,6 +161,7 @@ export default function App() {
     }
   }, [theme]);
   useEffect(() => { tail.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
+  useEffect(() => { latestInput.current = input; }, [input]);
   useLayoutEffect(() => {
     const textarea = composerTextarea.current;
     const field = composerField.current;
@@ -326,7 +341,14 @@ export default function App() {
     const body = text.trim();
     if (!body || abort.current || !token) return;
 
-    stopDictation();
+    const keepLiveOpen = liveActiveRef.current;
+    if (keepLiveOpen) {
+      clearLiveSilenceTimer();
+      dictationBase.current = '';
+      speechInput.current?.resetTranscript();
+      const phase = speechOutput.current?.snapshot().phase;
+      if (phase && !['idle', 'ended', 'error'].includes(phase)) speechOutput.current?.stop();
+    } else stopDictation();
     setCorrection(null);
     window.clearTimeout(correctionTimer.current);
 
@@ -341,6 +363,7 @@ export default function App() {
 
     const ctl = new AbortController();
     abort.current = ctl;
+    let streamedAnswer = '';
     try {
       const r = await fetch(API + '/api/chat', {
         method: 'POST',
@@ -378,6 +401,7 @@ export default function App() {
           const event = JSON.parse(data);
           if (event.error) throw Error(event.error);
           if (typeof event.delta === 'string') {
+            streamedAnswer += event.delta;
             setMessages(cur => cur.map(m => m.id === assistantId ? { ...m, content: m.content + event.delta } : m));
           }
           if (Array.isArray(event.tool_calls)) {
@@ -411,6 +435,7 @@ export default function App() {
       };
       await readEvents(r);
       setMessages(cur => cur.map(m => m.id === assistantId ? { ...m, status: 'complete' } : m));
+      if (liveActiveRef.current && streamedAnswer.trim()) speechOutput.current?.play(assistantId, streamedAnswer);
     } catch (x) {
       const canceled = (x as Error).name === 'AbortError';
       if (canceled) conversationId.current = crypto.randomUUID();
@@ -434,6 +459,8 @@ export default function App() {
     }
   }
 
+  sendRef.current = send;
+
   function stopDictation() {
     const controller = speechInput.current;
     speechInput.current = null;
@@ -442,15 +469,49 @@ export default function App() {
     setDictationStatus('');
   }
 
-  function startDictation() {
+  function clearLiveSilenceTimer() {
+    if (liveSilenceTimer.current !== null) window.clearInterval(liveSilenceTimer.current);
+    liveSilenceTimer.current = null;
+    setLiveCountdown(null);
+  }
+
+  function armLiveSilenceTimer(silenceElapsedMs = 0) {
+    if (!liveActiveRef.current || liveSilenceTimer.current !== null) return;
+    const deadline = Date.now() + Math.max(0, LIVE_SILENCE_MS - silenceElapsedMs);
+    liveSilenceTimer.current = window.setInterval(() => {
+      if (!liveActiveRef.current) {
+        clearLiveSilenceTimer();
+        return;
+      }
+      const remaining = Math.ceil((deadline - Date.now()) / 1000);
+      if (remaining <= 0) {
+        clearLiveSilenceTimer();
+        const latest = latestInput.current.trim();
+        if (latest) void sendRef.current?.(undefined, latest);
+        return;
+      }
+      setLiveCountdown(remaining <= 2 ? remaining : null);
+    }, 100);
+  }
+
+  function startSpeechInput(mode: 'dictation' | 'live') {
     speechInput.current?.stop();
-    speechOutput.current?.stop();
     window.clearTimeout(correctionTimer.current);
     setCorrection(null);
     dictationBase.current = input;
     setError('');
     const inputController = new SpeechInput(API, () => sessionStorage.getItem('chat-token') || '', {
       onStatus: status => { if (speechInput.current === inputController) setDictationStatus(status); },
+      onSpeechStarted: () => {
+        if (mode !== 'live' || !liveActiveRef.current) return;
+        clearLiveSilenceTimer();
+        if (abort.current) abort.current.abort();
+        const phase = speechOutput.current?.snapshot().phase;
+        if (phase && !['idle', 'ended', 'error'].includes(phase)) speechOutput.current?.stop();
+      },
+      onSpeechEnded: silenceElapsedMs => {
+        if (mode === 'live' && liveActiveRef.current) armLiveSilenceTimer(silenceElapsedMs);
+      },
       onTranscript: update => {
         if (speechInput.current !== inputController) return;
         const dictated = [update.committed, update.interim].filter(Boolean).join(' ').slice(0, Math.max(0, 12000 - dictationBase.current.length));
@@ -469,14 +530,43 @@ export default function App() {
     void inputController.start();
   }
 
-  function interruptAndDictate() {
-    if (busy) abort.current?.abort();
+  function startDictation() {
+    startSpeechInput('dictation');
+  }
+
+  function startLive() {
+    if (liveActiveRef.current) {
+      stopLive();
+      return;
+    }
+    liveActiveRef.current = true;
+    dictationBase.current = input;
+    setLiveActive(true);
+    setDictationActive(true);
+    startSpeechInput('live');
+  }
+
+  function stopLive() {
+    liveActiveRef.current = false;
+    clearLiveSilenceTimer();
+    if (abort.current) abort.current.abort();
     speechOutput.current?.stop();
-    startDictation();
+    speechInput.current?.stop();
+    speechInput.current = null;
+    setLiveActive(false);
+    setDictationActive(false);
+    setDictationStatus('');
+  }
+
+  function interruptResponse() {
+    if (abort.current) abort.current.abort();
+    const phase = speechOutput.current?.snapshot().phase;
+    if (phase && !['idle', 'ended', 'error'].includes(phase)) speechOutput.current?.stop();
   }
 
   const answerSpeaking = speech.phase === 'loading' || speech.phase === 'speaking-edge' || speech.phase === 'speaking-browser' || speech.phase === 'paused';
-  const micLabel = dictationActive ? 'Mute' : busy || answerSpeaking ? 'Interrupt' : 'Mic';
+  const micLabel = dictationActive && !liveActive ? 'Mute' : 'Mic';
+  const listenerStatus = liveCountdown === null ? dictationStatus : `Sending in ${liveCountdown}…`;
 
   if (!token) {
     return <main className="gate">
@@ -558,7 +648,7 @@ export default function App() {
                 ? <><span title={speech.detail}>Brian voice unavailable.</span> <button type="button" onClick={() => void speechOutput.current?.reconnect()}>Reconnect</button></>
                 : 'Checking Brian voice…'}
         </div>
-        <div className="status-item dictation-status" role="status">{dictationStatus || <span aria-hidden="true">&nbsp;</span>}</div>
+        <div className="status-item dictation-status" role="status">{listenerStatus || <span aria-hidden="true">&nbsp;</span>}</div>
         <div className="status-item webmcp-status" role="status">{webmcp}</div>
       </div>
       {error && <p className="error">{error}</p>}
@@ -571,10 +661,14 @@ export default function App() {
             onFocus={() => { void checkSession(); }}
             onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }} />
         </div>
-        <button type="button" className="mic" onClick={dictationActive ? stopDictation : interruptAndDictate} disabled={!token} aria-label={micLabel} title={dictationActive ? 'Stop speech recognition' : busy || answerSpeaking ? 'Interrupt and dictate' : 'Dictate'}>
+        <button type="button" className="mic" onClick={dictationActive && !liveActive ? stopDictation : startDictation} disabled={!token || liveActive || busy || answerSpeaking} aria-label={micLabel} title={dictationActive && !liveActive ? 'Stop dictation' : 'Start dictation'}>
           {micLabel}
         </button>
-        <button type="submit" disabled={!input.trim() || busy}>↑</button>
+        <button type="button" className={'live' + (liveActive ? ' active' : '')} onClick={startLive} disabled={!token || (!liveActive && (dictationActive || busy || answerSpeaking))} aria-label={liveActive ? 'End Live' : 'Start Live'} title={liveActive ? 'End live voice conversation' : 'Start live voice conversation'}>
+          {liveActive ? 'End Live' : 'Live'}
+        </button>
+        {(busy || answerSpeaking) && <button type="button" className="interrupt" onClick={interruptResponse}>Interrupt</button>}
+        <button type="submit" aria-label={liveActive && input.trim() ? 'Send now' : '↑'} className={liveActive && input.trim() ? 'send-now' : ''} disabled={!input.trim() || busy}>{liveActive && input.trim() ? 'Send now' : '↑'}</button>
       </form>
       <p className="footnote">Enter to send · Shift + Enter for a new line</p>
     </footer>

@@ -3,6 +3,8 @@ export type TranscriptUpdate = { committed: string; interim: string; corrected: 
 export type SpeechInputCallbacks = {
   onTranscript: (update: TranscriptUpdate) => void;
   onStatus: (status: string) => void;
+  onSpeechStarted?: () => void;
+  onSpeechEnded?: (silenceElapsedMs?: number) => void;
 };
 
 type SpeechRecognitionResult = { isFinal: boolean; 0: { transcript: string } };
@@ -22,6 +24,8 @@ type SpeechRecognitionWindow = Window & { SpeechRecognition?: new () => SpeechRe
 const LIVE_MODEL = 'models/gemini-3.5-transcribe-live';
 const LIVE_SOCKET = 'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContentConstrained';
 const TARGET_RATE = 16000;
+const VAD_START_THRESHOLD = 0.012;
+const VAD_END_SILENCE_MS = 600;
 
 function transcriptCorrection(previous: string, next: string): TranscriptCorrection | null {
   const normalize = (text: string) => text.normalize('NFC').trim().replace(/\s+/gu, ' ');
@@ -67,6 +71,9 @@ export class SpeechInput {
   private queuedAudio: string[] = [];
   private reconnects = 0;
   private liveReady = false;
+  private speechActive = false;
+  private loudFrames = 0;
+  private quietMs = 0;
 
   constructor(private api: string, private getToken: () => string, private callbacks: SpeechInputCallbacks) {}
 
@@ -79,6 +86,9 @@ export class SpeechInput {
     this.resumeHandle = '';
     this.reconnects = 0;
     this.liveReady = false;
+    this.speechActive = false;
+    this.loudFrames = 0;
+    this.quietMs = 0;
     this.callbacks.onStatus('Connecting to Gemini Live…');
     try {
       if (!navigator.mediaDevices?.getUserMedia || typeof WebSocket === 'undefined') throw new Error('Live audio is unavailable in this browser.');
@@ -127,6 +137,15 @@ export class SpeechInput {
     void this.context?.close();
     this.context = null;
     this.queuedAudio = [];
+    this.speechActive = false;
+    this.loudFrames = 0;
+    this.quietMs = 0;
+  }
+
+  resetTranscript(): void {
+    this.committed = '';
+    this.interim = '';
+    this.publish(null);
   }
 
   private isCurrent(id: number): boolean { return this.active && id === this.generation; }
@@ -196,6 +215,7 @@ export class SpeechInput {
         const partial = content.interimInputTranscription?.text;
         const final = content.inputTranscription?.text;
         if (typeof partial === 'string') {
+          if (partial.trim() && !this.interim.trim()) this.callbacks.onSpeechStarted?.();
           const previous = this.interim;
           this.interim = partial;
           this.publish(transcriptCorrection(previous, partial));
@@ -205,6 +225,7 @@ export class SpeechInput {
           this.committed = [this.committed, final].filter(Boolean).join(' ');
           this.interim = '';
           this.publish(correction);
+          this.callbacks.onSpeechEnded?.();
         }
       };
       socket.onerror = () => fail(new Error('Gemini Live connection failed.'));
@@ -240,12 +261,42 @@ export class SpeechInput {
       const sample = total / Math.max(1, end - start);
       pcm[i] = Math.max(-1, Math.min(1, sample)) * (sample < 0 ? 32768 : 32767);
     }
+    const activity = this.detectSpeech(input, sourceRate);
     const encoded = JSON.stringify({ realtimeInput: { audio: { mimeType: 'audio/pcm;rate=16000', data: base64Pcm(new Uint8Array(pcm.buffer)) } } });
-    if (this.liveReady && this.socket?.readyState === WebSocket.OPEN) this.socket.send(encoded);
+    const packets = activity === 'ended' ? [encoded, JSON.stringify({ realtimeInput: { audioStreamEnd: true } })] : [encoded];
+    if (this.liveReady && this.socket?.readyState === WebSocket.OPEN) packets.forEach(packet => this.socket?.send(packet));
     else {
-      this.queuedAudio.push(encoded);
+      this.queuedAudio.push(...packets);
       if (this.queuedAudio.length > 500) this.fallback(new Error('Live session setup took too long.'), this.generation);
     }
+  }
+
+  private detectSpeech(samples: Float32Array, sampleRate: number): 'started' | 'ended' | null {
+    let energy = 0;
+    for (const sample of samples) energy += sample * sample;
+    const rms = Math.sqrt(energy / Math.max(1, samples.length));
+    const frameMs = samples.length / sampleRate * 1000;
+    if (rms >= VAD_START_THRESHOLD) {
+      this.quietMs = 0;
+      this.loudFrames++;
+      if (!this.speechActive && this.loudFrames >= 2) {
+        this.speechActive = true;
+        this.callbacks.onSpeechStarted?.();
+        return 'started';
+      }
+    } else {
+      this.loudFrames = 0;
+      if (this.speechActive) {
+        this.quietMs += frameMs;
+        if (this.quietMs >= VAD_END_SILENCE_MS) {
+          this.speechActive = false;
+          this.quietMs = 0;
+          this.callbacks.onSpeechEnded?.(VAD_END_SILENCE_MS);
+          return 'ended';
+        }
+      }
+    }
+    return null;
   }
 
   private publish(corrected: TranscriptCorrection | null): void {
@@ -295,8 +346,11 @@ export class SpeechInput {
           else interim += text;
         }
         if (finals) this.committed = [this.committed, finals.trim()].filter(Boolean).join(' ');
+        const beganSpeaking = Boolean(interim) && (!this.interim.trim() || Boolean(finals));
         this.interim = interim;
         this.publish(null);
+        if (finals) this.callbacks.onSpeechEnded?.();
+        if (beganSpeaking) this.callbacks.onSpeechStarted?.();
       };
       recognition.onerror = event => {
         if (!this.isCurrent(id) || this.recognition !== recognition) return;
