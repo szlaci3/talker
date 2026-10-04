@@ -132,6 +132,18 @@ describe('chat cancellation and recovery', () => {
     fetchMock = mockApi(sessionCheck);
   });
 
+  it('shows the three service states together in the status row', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    const row = document.querySelector('.status-row')!;
+    expect(row.children).toHaveLength(3);
+    expect(row.children[0]).toHaveTextContent('Checking Brian voice');
+    expect(row.children[2]).toHaveTextContent('Standard chat (no WebMCP)');
+    await user.click(screen.getByRole('button', { name: 'Mic' }));
+    expect(await screen.findByText('Gemini is listening')).toBeInTheDocument();
+    expect(row.children[1]).toHaveTextContent('Gemini is listening');
+  });
+
   it('appends live dictation to a typed draft, highlights corrections, and ends capture before sending', async () => {
     const user = userEvent.setup();
     render(<App />);
@@ -143,7 +155,7 @@ describe('chat cancellation and recovery', () => {
     expect(screen.queryByText('Corrected:')).not.toBeInTheDocument();
     speechInputMock.instances[0].callbacks.onTranscript({ committed: 'the new phrase', interim: '', corrected: { before: 'old', after: 'new' } });
     await waitFor(() => expect(textbox).toHaveValue('Please review: the new phrase'));
-    expect(screen.getByText('old').tagName).toBe('DEL');
+    expect(screen.queryByText('Corrected:')).not.toBeInTheDocument();
     const highlightedDraft = document.querySelector('.composer-preview .composer-correction');
     expect(highlightedDraft).toHaveTextContent('new');
     expect(highlightedDraft).toHaveClass('composer-correction');
@@ -173,23 +185,24 @@ describe('chat cancellation and recovery', () => {
     });
   });
 
-  it('shows deleted words separately and expires the correction after five seconds even as new words arrive', async () => {
+  it('shows corrected words in the draft for five seconds without a separate correction line', async () => {
     const user = userEvent.setup();
     render(<App />);
     await user.click(screen.getByRole('button', { name: 'Mic' }));
     const callback = speechInputMock.instances[0].callbacks.onTranscript;
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     try {
-      act(() => callback({ committed: '', interim: 'I like tea', corrected: { before: 'really', after: '' } }));
-      expect(screen.getByText('really').tagName).toBe('DEL');
-      expect(screen.getByText('(removed)').tagName).toBe('MARK');
-      expect(screen.getByRole('textbox', { name: 'Message' })).toHaveValue('I like tea');
-      act(() => vi.advanceTimersByTime(4000));
-      act(() => callback({ committed: '', interim: 'I like tea and coffee', corrected: null }));
-      expect(screen.getByText('Corrected:')).toBeInTheDocument();
-      act(() => vi.advanceTimersByTime(1000));
+      act(() => callback({ committed: '', interim: 'I like dogs today', corrected: { before: 'cats', after: 'dogs' } }));
+      expect(screen.getByRole('textbox', { name: 'Message' })).toHaveValue('I like dogs today');
+      expect(document.querySelector('.composer-correction')).toHaveTextContent('dogs');
       expect(screen.queryByText('Corrected:')).not.toBeInTheDocument();
-      expect(screen.getByRole('textbox', { name: 'Message' })).toHaveValue('I like tea and coffee');
+      act(() => vi.advanceTimersByTime(4000));
+      act(() => callback({ committed: '', interim: 'I like dogs today and coffee', corrected: null }));
+      expect(document.querySelector('.composer-correction')).toHaveTextContent('dogs');
+      act(() => vi.advanceTimersByTime(1000));
+      expect(document.querySelector('.composer-correction')).not.toBeInTheDocument();
+      expect(screen.queryByText('Corrected:')).not.toBeInTheDocument();
+      expect(screen.getByRole('textbox', { name: 'Message' })).toHaveValue('I like dogs today and coffee');
     } finally {
       vi.useRealTimers();
     }
@@ -527,7 +540,7 @@ describe('conversational appearance tools', () => {
     try {
       render(<App />);
       await waitFor(() => expect(registerTool).toHaveBeenCalledTimes(5));
-      expect(screen.getByText('WebMCP tools are registered. Chat remains available.')).toBeInTheDocument();
+      expect(screen.getByText('WebMCP tools active')).toBeInTheDocument();
       const colorTool = registered.find(tool => tool.name === 'set_ui_color');
       const execute = colorTool?.execute as (input: unknown) => { ok: boolean };
       const result = execute({ target: 'composerBackground', color: '#123456' });

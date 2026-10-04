@@ -15,7 +15,7 @@ type Message = {
 
 const API = import.meta.env.VITE_API_URL || 'http://localhost:8080';
 const suggestions = ['What can you help me with?', 'Explain a tricky idea simply', 'Help me plan a small project'];
-const WEBMCP_FALLBACK = "WebMCP isn't available in this browser. Chat and conversational UI controls remain available.";
+const WEBMCP_FALLBACK = 'Standard chat (no WebMCP)';
 
 function preferences(theme: string, scale: number): { theme: string; fontScale: number; colors: ColorPreferences } {
   const root = document.documentElement;
@@ -86,7 +86,7 @@ export default function App() {
   const [correction, setCorrection] = useState<TranscriptCorrection | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  const [webmcp, setWebmcp] = useState('Checking WebMCP availability…');
+  const [webmcp, setWebmcp] = useState('Checking WebMCP…');
   const [theme, setTheme] = useState<Theme>(initialTheme);
   const [scale, setScale] = useState(initialScale);
   const [colorOverrides, setColorOverrides] = useState(readSavedColors);
@@ -266,7 +266,7 @@ export default function App() {
           return action ? applyUiAction(action) : { ok: false, message: 'That UI action is invalid.' };
         },
       }, { signal: registration.signal });
-    })).then(() => { if (active) setWebmcp('WebMCP tools are registered. Chat remains available.'); })
+    })).then(() => { if (active) setWebmcp('WebMCP tools active'); })
       .catch(() => { if (active) setWebmcp(WEBMCP_FALLBACK); });
     return () => { active = false; registration.abort(); };
   }, [applyUiAction]);
@@ -550,10 +550,17 @@ export default function App() {
       <div ref={tail} />
     </section>
     <footer>
-      <p className="notice">{webmcp}</p>
-      {speech.service === 'connecting' && <p className="speech-service" role="status">Speech service is waking. Play uses browser speech until Brian is ready.</p>}
-        {speech.service === 'unavailable' && <p className="speech-service" role="status">{speech.detail} <button type="button" onClick={() => void speechOutput.current?.reconnect()}>Reconnect</button></p>}
-      {speech.service === 'ready' && <p className="speech-service" role="status">Brian voice is ready.</p>}
+      <div className="status-row">
+        <div className="status-item speech-service" role="status">
+          {speech.service === 'ready' ? 'Brian voice is ready.'
+            : speech.service === 'connecting' ? 'Brian voice is connecting.'
+              : speech.service === 'unavailable'
+                ? <><span title={speech.detail}>Brian voice unavailable.</span> <button type="button" onClick={() => void speechOutput.current?.reconnect()}>Reconnect</button></>
+                : 'Checking Brian voice…'}
+        </div>
+        <div className="status-item dictation-status" role="status">{dictationStatus || <span aria-hidden="true">&nbsp;</span>}</div>
+        <div className="status-item webmcp-status" role="status">{webmcp}</div>
+      </div>
       {error && <p className="error">{error}</p>}
       <form className="composer" onSubmit={send}>
         <div className="composer-field" ref={composerField}>
@@ -569,8 +576,6 @@ export default function App() {
         </button>
         <button type="submit" disabled={!input.trim() || busy}>↑</button>
       </form>
-      {dictationStatus && <p className="dictation-status" role="status">{dictationStatus}</p>}
-      {correction && <p className="correction" role="status"><span>Corrected:</span> <del>{correction.before || '(insertion)'}</del> → <mark>{correction.after || '(removed)'}</mark></p>}
       <p className="footnote">Enter to send · Shift + Enter for a new line</p>
     </footer>
   </main>;
