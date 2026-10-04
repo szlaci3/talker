@@ -3,7 +3,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { accessibleTextColor, COLOR_CSS_VARIABLES, COLOR_TARGETS, ColorPreferences, ColorTarget, contrastRatio, DEFAULT_COLORS, initialScale, initialTheme, parseColor, readSavedColors, Theme, UI_TOOL_DECLARATIONS, UiAction, validateUiAction } from './uiTools';
 import { SpeechOutput, SpeechSnapshot } from './speechOutput';
-import { SpeechInput } from './speechInput';
+import { SpeechInput, TranscriptCorrection } from './speechInput';
 import { executeNativeUiTool, WebMCPContext, WebMCPTool } from './webmcp';
 
 type Message = {
@@ -58,7 +58,7 @@ export default function App() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [dictationStatus, setDictationStatus] = useState('');
-  const [correction, setCorrection] = useState('');
+  const [correction, setCorrection] = useState<TranscriptCorrection | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [webmcp, setWebmcp] = useState('Checking WebMCP availability…');
@@ -282,7 +282,7 @@ export default function App() {
     speechInput.current?.stop();
     speechInput.current = null;
     setDictationStatus('');
-    setCorrection('');
+    setCorrection(null);
     window.clearTimeout(correctionTimer.current);
 
     setInput('');
@@ -392,6 +392,8 @@ export default function App() {
   function startDictation() {
     speechInput.current?.stop();
     speechOutput.current?.stop();
+    window.clearTimeout(correctionTimer.current);
+    setCorrection(null);
     dictationBase.current = input;
     setError('');
     const inputController = new SpeechInput(API, () => sessionStorage.getItem('chat-token') || '', {
@@ -404,7 +406,7 @@ export default function App() {
         if (update.corrected) {
           setCorrection(update.corrected);
           window.clearTimeout(correctionTimer.current);
-          correctionTimer.current = window.setTimeout(() => setCorrection(''), 5000);
+          correctionTimer.current = window.setTimeout(() => setCorrection(null), 5000);
         }
       },
     });
@@ -507,7 +509,7 @@ export default function App() {
         <button type="submit" disabled={!input.trim() || busy}>↑</button>
       </form>
       {dictationStatus && <p className="dictation-status" role="status">{dictationStatus}</p>}
-      {correction && <p className="correction" role="status"><span>Corrected:</span> <mark>{correction}</mark></p>}
+      {correction && <p className="correction" role="status"><span>Corrected:</span> <del>{correction.before || '(insertion)'}</del> → <mark>{correction.after || '(removed)'}</mark></p>}
       <p className="footnote">Enter to send · Shift + Enter for a new line</p>
     </footer>
   </main>;

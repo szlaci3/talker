@@ -1,9 +1,10 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import App from './App';
+import type { TranscriptUpdate } from './speechInput';
 
-const speechInputMock = vi.hoisted(() => ({ instances: [] as Array<{ callbacks: { onTranscript: (update: { committed: string; interim: string; corrected: string }) => void; onStatus: (status: string) => void }; stopped: boolean }> }));
+const speechInputMock = vi.hoisted(() => ({ instances: [] as Array<{ callbacks: { onTranscript: (update: TranscriptUpdate) => void; onStatus: (status: string) => void }; stopped: boolean }> }));
 vi.mock('./speechInput', () => ({ SpeechInput: class {
   readonly callbacks: typeof speechInputMock.instances[number]['callbacks'];
   stopped = false;
@@ -123,13 +124,39 @@ describe('chat cancellation and recovery', () => {
     const textbox = screen.getByRole('textbox', { name: 'Message' });
     await user.type(textbox, 'Please review: ');
     await user.click(screen.getByRole('button', { name: 'Mic' }));
-    speechInputMock.instances[0].callbacks.onTranscript({ committed: 'the old phrase', interim: '', corrected: 'the new phrase' });
+    speechInputMock.instances[0].callbacks.onTranscript({ committed: '', interim: 'the old phrase', corrected: null });
     await waitFor(() => expect(textbox).toHaveValue('Please review: the old phrase'));
-    expect(screen.getByText('the new phrase').tagName).toBe('MARK');
+    expect(screen.queryByText('Corrected:')).not.toBeInTheDocument();
+    speechInputMock.instances[0].callbacks.onTranscript({ committed: 'the new phrase', interim: '', corrected: { before: 'old', after: 'new' } });
+    await waitFor(() => expect(textbox).toHaveValue('Please review: the new phrase'));
+    expect(screen.getByText('old').tagName).toBe('DEL');
+    expect(screen.getByText('new').tagName).toBe('MARK');
     fetchMock.mockResolvedValueOnce(eventStream({ delta: 'Reviewed.' }));
     await user.click(screen.getByRole('button', { name: '↑' }));
     expect(speechInputMock.instances[0].stopped).toBe(true);
-    expect(chatPayload(fetchMock, 0).messages.at(-1)?.content).toBe('Please review: the old phrase');
+    expect(chatPayload(fetchMock, 0).messages.at(-1)?.content).toBe('Please review: the new phrase');
+  });
+
+  it('shows deleted words separately and expires the correction after five seconds even as new words arrive', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole('button', { name: 'Mic' }));
+    const callback = speechInputMock.instances[0].callbacks.onTranscript;
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      act(() => callback({ committed: '', interim: 'I like tea', corrected: { before: 'really', after: '' } }));
+      expect(screen.getByText('really').tagName).toBe('DEL');
+      expect(screen.getByText('(removed)').tagName).toBe('MARK');
+      expect(screen.getByRole('textbox', { name: 'Message' })).toHaveValue('I like tea');
+      act(() => vi.advanceTimersByTime(4000));
+      act(() => callback({ committed: '', interim: 'I like tea and coffee', corrected: null }));
+      expect(screen.getByText('Corrected:')).toBeInTheDocument();
+      act(() => vi.advanceTimersByTime(1000));
+      expect(screen.queryByText('Corrected:')).not.toBeInTheDocument();
+      expect(screen.getByRole('textbox', { name: 'Message' })).toHaveValue('I like tea and coffee');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('marks a pre-token cancellation and excludes that unanswered question from the next request', async () => {

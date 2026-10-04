@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { SpeechInput } from './speechInput';
+import { SpeechInput, TranscriptUpdate } from './speechInput';
 
 function binaryJson(value: unknown): ArrayBuffer {
   return new Uint8Array(new TextEncoder().encode(JSON.stringify(value))).buffer;
@@ -55,7 +55,7 @@ describe('Gemini Live dictation', () => {
   const track = { stop: vi.fn() };
   const stream = { getTracks: () => [track] } as unknown as MediaStream;
   const statuses: string[] = [];
-  const transcripts: Array<{ committed: string; interim: string; corrected: string }> = [];
+  const transcripts: TranscriptUpdate[] = [];
 
   afterEach(() => {
     vi.useRealTimers();
@@ -102,7 +102,7 @@ describe('Gemini Live dictation', () => {
     FakeSocket.latest.receive({ serverContent: { interimInputTranscription: { text: 'hello worl' } } });
     FakeSocket.latest.receive({ serverContent: { inputTranscription: { text: 'hello world' } } });
     expect(transcripts.at(-2)).toMatchObject({ committed: '', interim: 'hello worl' });
-    expect(transcripts.at(-1)).toMatchObject({ committed: 'hello world', interim: '', corrected: 'hello world' });
+    expect(transcripts.at(-1)).toMatchObject({ committed: 'hello world', interim: '', corrected: null });
     controller.stop();
     expect(track.stop).toHaveBeenCalledOnce();
     FakeSocket.latest.receive({ serverContent: { inputTranscription: { text: 'stale words' } } });
@@ -116,6 +116,50 @@ describe('Gemini Live dictation', () => {
     expect(statuses.some(status => status.includes('Transcription model is unavailable.'))).toBe(true);
     expect(statuses).not.toContain('Listening');
     expect(FakeSocket.latest.readyState).toBe(FakeSocket.CLOSED);
+    controller.stop();
+  });
+
+  it.each([
+    { before: '', after: 'hello', corrected: null },
+    { before: 'hello', after: 'hello world', corrected: null },
+    { before: 'hello worl', after: 'hello world', corrected: null },
+    { before: 'hello world', after: 'hello world', corrected: null },
+    { before: ' hello  world ', after: 'hello world', corrected: null },
+    { before: 'cafe\u0301', after: 'café', corrected: null },
+    { before: 'I like cats today', after: 'I like dogs today', corrected: { before: 'cats', after: 'dogs' } },
+    { before: 'I really like tea', after: 'I like tea', corrected: { before: 'really', after: '' } },
+    { before: 'I like tea', after: 'I really like tea', corrected: { before: '', after: 'really' } },
+    { before: 'Budapestre megyek holnap', after: 'Szegedre megyek holnap', corrected: { before: 'Budapestre', after: 'Szegedre' } },
+    { before: '你好', after: '你好世界', corrected: null },
+  ])('distinguishes growth from revisions: "$before" → "$after"', async ({ before, after, corrected }) => {
+    const { controller } = setup();
+    await controller.start();
+    FakeSocket.latest.receive({ serverContent: { interimInputTranscription: { text: before } } });
+    expect(transcripts.at(-1)?.corrected).toBeNull();
+    FakeSocket.latest.receive({ serverContent: { interimInputTranscription: { text: after } } });
+    expect(transcripts.at(-1)).toEqual({ committed: '', interim: after, corrected });
+    controller.stop();
+  });
+
+  it('detects final revisions once, removes deleted words, and treats the next utterance as new text', async () => {
+    const { controller } = setup();
+    await controller.start();
+    FakeSocket.latest.receive({ serverContent: { interimInputTranscription: { text: 'I really like tea' } } });
+    FakeSocket.latest.receive({ serverContent: { inputTranscription: { text: 'I like tea' } } });
+    expect(transcripts.at(-1)).toEqual({ committed: 'I like tea', interim: '', corrected: { before: 'really', after: '' } });
+    FakeSocket.latest.receive({ serverContent: { interimInputTranscription: { text: 'and coffee' } } });
+    expect(transcripts.at(-1)).toEqual({ committed: 'I like tea', interim: 'and coffee', corrected: null });
+    FakeSocket.latest.receive({ serverContent: { inputTranscription: { text: 'and coffee too' } } });
+    expect(transcripts.at(-1)).toEqual({ committed: 'I like tea and coffee too', interim: '', corrected: null });
+    controller.stop();
+  });
+
+  it('reports removal of the whole interim without retaining deleted words', async () => {
+    const { controller } = setup();
+    await controller.start();
+    FakeSocket.latest.receive({ serverContent: { interimInputTranscription: { text: 'false start' } } });
+    FakeSocket.latest.receive({ serverContent: { interimInputTranscription: { text: '' } } });
+    expect(transcripts.at(-1)).toEqual({ committed: '', interim: '', corrected: { before: 'false start', after: '' } });
     controller.stop();
   });
 

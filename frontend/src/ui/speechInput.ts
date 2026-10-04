@@ -1,4 +1,5 @@
-export type TranscriptUpdate = { committed: string; interim: string; corrected: string };
+export type TranscriptCorrection = { before: string; after: string };
+export type TranscriptUpdate = { committed: string; interim: string; corrected: TranscriptCorrection | null };
 export type SpeechInputCallbacks = {
   onTranscript: (update: TranscriptUpdate) => void;
   onStatus: (status: string) => void;
@@ -21,6 +22,25 @@ type SpeechRecognitionWindow = Window & { SpeechRecognition?: new () => SpeechRe
 const LIVE_MODEL = 'models/gemini-3.5-transcribe-live';
 const LIVE_SOCKET = 'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContentConstrained';
 const TARGET_RATE = 16000;
+
+function transcriptCorrection(previous: string, next: string): TranscriptCorrection | null {
+  const normalize = (text: string) => text.normalize('NFC').trim().replace(/\s+/gu, ' ');
+  const before = normalize(previous);
+  const after = normalize(next);
+  // New words and completion of a trailing partial word do not rewrite displayed text.
+  if (!before || after.startsWith(before)) return null;
+  const oldWords = before.split(' ');
+  const newWords = after ? after.split(' ') : [];
+  let start = 0;
+  while (start < oldWords.length && start < newWords.length && oldWords[start] === newWords[start]) start++;
+  let oldEnd = oldWords.length;
+  let newEnd = newWords.length;
+  while (oldEnd > start && newEnd > start && oldWords[oldEnd - 1] === newWords[newEnd - 1]) {
+    oldEnd--;
+    newEnd--;
+  }
+  return { before: oldWords.slice(start, oldEnd).join(' '), after: newWords.slice(start, newEnd).join(' ') };
+}
 
 function base64Pcm(bytes: Uint8Array): string {
   let binary = '';
@@ -171,10 +191,10 @@ export class SpeechInput {
         if (typeof partial === 'string') {
           const previous = this.interim;
           this.interim = partial;
-          this.publish(previous && partial !== previous ? partial : '');
+          this.publish(transcriptCorrection(previous, partial));
         }
         if (typeof final === 'string' && final) {
-          const correction = this.interim && this.interim.trim() !== final.trim() ? final : '';
+          const correction = transcriptCorrection(this.interim, final);
           this.committed = [this.committed, final].filter(Boolean).join(' ');
           this.interim = '';
           this.publish(correction);
@@ -221,7 +241,7 @@ export class SpeechInput {
     }
   }
 
-  private publish(corrected: string): void {
+  private publish(corrected: TranscriptCorrection | null): void {
     this.callbacks.onTranscript({ committed: this.committed, interim: this.interim, corrected });
   }
 
@@ -269,7 +289,7 @@ export class SpeechInput {
         }
         if (finals) this.committed = [this.committed, finals.trim()].filter(Boolean).join(' ');
         this.interim = interim;
-        this.publish('');
+        this.publish(null);
       };
       recognition.onerror = event => {
         this.callbacks.onStatus(`English browser recognition error${event.error ? `: ${event.error}` : ''}.`);
