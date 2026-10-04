@@ -5,7 +5,7 @@ import App from './App';
 import type { TranscriptUpdate } from './speechInput';
 
 const speechInputMock = vi.hoisted(() => ({ instances: [] as Array<{ callbacks: { onTranscript: (update: TranscriptUpdate) => void; onStatus: (status: string) => void; onSpeechStarted?: () => void; onSpeechEnded?: (elapsed?: number) => void }; stopped: boolean }> }));
-const speechOutputMock = vi.hoisted(() => ({ instances: [] as Array<{ phase: string; messageId: string | null; plays: Array<[string, string]>; stops: number }> }));
+const speechOutputMock = vi.hoisted(() => ({ instances: [] as Array<{ phase: string; messageId: string | null; plays: Array<[string, string]>; toggles: Array<[string, string]>; stops: number }> }));
 vi.mock('./speechInput', () => ({ SpeechInput: class {
   readonly callbacks: typeof speechInputMock.instances[number]['callbacks'];
   stopped = false;
@@ -21,6 +21,7 @@ vi.mock('./speechOutput', () => ({ SpeechOutput: class {
   phase = 'idle';
   messageId: string | null = null;
   plays: Array<[string, string]> = [];
+  toggles: Array<[string, string]> = [];
   stops = 0;
   constructor(_api: string, _getToken: () => string, private onSnapshot: (value: { messageId: string | null; phase: string; service: string; detail: string }) => void) {
     speechOutputMock.instances.push(this);
@@ -28,7 +29,7 @@ vi.mock('./speechOutput', () => ({ SpeechOutput: class {
   snapshot() { return { messageId: this.messageId, phase: this.phase, service: 'idle', detail: '' }; }
   async warmup() {}
   play(messageId: string, text: string) { this.messageId = messageId; this.phase = 'speaking-browser'; this.plays.push([messageId, text]); this.onSnapshot(this.snapshot()); }
-  toggle(messageId: string) { this.messageId = messageId; this.phase = 'speaking-browser'; this.onSnapshot(this.snapshot()); }
+  toggle(messageId: string, text: string) { this.messageId = messageId; this.phase = 'speaking-browser'; this.toggles.push([messageId, text]); this.onSnapshot(this.snapshot()); }
   stop() { this.stops++; this.phase = 'idle'; this.onSnapshot(this.snapshot()); }
   dispose() { this.stop(); }
 } }));
@@ -210,6 +211,24 @@ describe('chat cancellation and recovery', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('ends Live on an older message click and still plays that message', async () => {
+    fetchMock.mockResolvedValueOnce(eventStream({ delta: 'OLDER_ANSWER' }));
+    const user = userEvent.setup();
+    render(<App />);
+    await user.type(screen.getByRole('textbox', { name: 'Message' }), 'First question');
+    await user.click(screen.getByRole('button', { name: '↑' }));
+    expect(await screen.findByText('OLDER_ANSWER')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Start Live' }));
+    expect(screen.getByRole('button', { name: 'End Live' })).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Play' }));
+
+    expect(screen.queryByRole('button', { name: 'End Live' })).not.toBeInTheDocument();
+    expect(speechInputMock.instances[0].stopped).toBe(true);
+    expect(speechOutputMock.instances[0].toggles.at(-1)?.[1]).toBe('OLDER_ANSWER');
+    expect(speechOutputMock.instances[0].phase).toBe('speaking-browser');
   });
 
   it('appends live dictation to a typed draft, highlights corrections, and ends capture before sending', async () => {

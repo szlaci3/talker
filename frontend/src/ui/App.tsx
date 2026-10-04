@@ -582,7 +582,12 @@ export default function App() {
     </main>;
   }
 
-  return <main className="shell">
+  return <main className="shell" onClickCapture={event => {
+    if (!liveActiveRef.current) return;
+    const target = event.target;
+    if (target instanceof Element && target.closest('.composer .live')) return;
+    stopLive();
+  }}>
     <header>
       <a className="brand" href="/">✳ <span>Chat</span></a>
       <div className="toolbar">
