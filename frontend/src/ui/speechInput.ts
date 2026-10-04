@@ -186,7 +186,7 @@ export class SpeechInput {
           clearTimeout(setupTimer);
           this.reconnects = 0;
           for (const audio of this.queuedAudio.splice(0)) socket.send(audio);
-          this.callbacks.onStatus('Listening');
+          this.callbacks.onStatus('Gemini is listening');
           resolve();
         }
         const resume = message.sessionResumptionUpdate;
@@ -308,6 +308,7 @@ export class SpeechInput {
       };
       recognition.onend = () => { if (this.isCurrent(id) && this.recognition === recognition) { try { recognition.start(); } catch { /* Browser may already be restarting. */ } } };
       recognition.start();
+      this.callbacks.onStatus('Browser is listening');
     } catch {
       this.callbacks.onStatus('English browser recognition could not start. You can keep typing.');
     }

@@ -13,7 +13,7 @@ vi.mock('./speechInput', () => ({ SpeechInput: class {
     this.callbacks = callbacks;
     speechInputMock.instances.push(this);
   }
-  async start() { this.callbacks.onStatus('Listening'); }
+  async start() { this.callbacks.onStatus('Gemini is listening'); }
   stop() { this.stopped = true; }
 } }));
 vi.mock('./speechOutput', () => ({ SpeechOutput: class {
@@ -173,7 +173,7 @@ describe('chat cancellation and recovery', () => {
     }
   });
 
-  it.each(['Connecting to Gemini Live…', 'Listening'])('mutes during %s, keeps the draft, and resumes dictation without late updates', async status => {
+  it.each(['Connecting to Gemini Live…', 'Gemini is listening'])('mutes during %s, keeps the draft, and resumes dictation without late updates', async status => {
     const user = userEvent.setup();
     render(<App />);
     const textbox = screen.getByRole('textbox', { name: 'Message' });

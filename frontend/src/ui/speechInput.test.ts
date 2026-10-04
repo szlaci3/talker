@@ -89,7 +89,7 @@ describe('Gemini Live dictation', () => {
     expect(FakeSocket.latest.url).toContain('access_token=ephemeral-token');
     expect(FakeSocket.latest.url).toContain('BidiGenerateContentConstrained');
     expect(FakeSocket.latest.binaryType).toBe('arraybuffer');
-    expect(statuses).toEqual(['Connecting to Gemini Live…', 'Listening']);
+    expect(statuses).toEqual(['Connecting to Gemini Live…', 'Gemini is listening']);
     expect(JSON.parse(FakeSocket.latest.sent[0])).toMatchObject({ setup: {
       model: 'models/gemini-3.5-transcribe-live',
       inputAudioTranscription: { languageCodes: [] },
@@ -114,7 +114,7 @@ describe('Gemini Live dictation', () => {
     const { controller } = setup();
     await controller.start();
     expect(statuses.some(status => status.includes('Transcription model is unavailable.'))).toBe(true);
-    expect(statuses).not.toContain('Listening');
+    expect(statuses).not.toContain('Gemini is listening');
     expect(FakeSocket.latest.readyState).toBe(FakeSocket.CLOSED);
     controller.stop();
   });
@@ -188,7 +188,7 @@ describe('Gemini Live dictation', () => {
     await starting;
     expect(statuses.some(status => status.includes('setup timed out'))).toBe(true);
     FakeSocket.latest.receive({ setupComplete: {} });
-    expect(statuses).not.toContain('Listening');
+    expect(statuses).not.toContain('Gemini is listening');
     expect(FakeSocket.latest.readyState).toBe(FakeSocket.CLOSED);
     controller.stop();
   });
@@ -211,6 +211,7 @@ describe('Gemini Live dictation', () => {
     await controller.start();
     expect(FakeRecognition.instance.lang).toBe('en-US');
     expect(FakeRecognition.instance.continuous).toBe(true);
+    expect(statuses).toContain('Browser is listening');
     FakeRecognition.instance.onresult?.({ resultIndex: 0, results: [{ isFinal: true, 0: { transcript: 'fallback works' } }] });
     expect(transcripts.at(-1)).toMatchObject({ committed: 'fallback works' });
     expect(statuses.some(status => status.includes('Google reported invalid token constraints') && status.includes('Continuing in English'))).toBe(true);
