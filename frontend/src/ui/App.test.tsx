@@ -144,11 +144,33 @@ describe('chat cancellation and recovery', () => {
     speechInputMock.instances[0].callbacks.onTranscript({ committed: 'the new phrase', interim: '', corrected: { before: 'old', after: 'new' } });
     await waitFor(() => expect(textbox).toHaveValue('Please review: the new phrase'));
     expect(screen.getByText('old').tagName).toBe('DEL');
-    expect(screen.getByText('new').tagName).toBe('MARK');
+    const highlightedDraft = document.querySelector('.composer-preview .composer-correction');
+    expect(highlightedDraft).toHaveTextContent('new');
+    expect(highlightedDraft).toHaveClass('composer-correction');
     fetchMock.mockResolvedValueOnce(eventStream({ delta: 'Reviewed.' }));
     await user.click(screen.getByRole('button', { name: '↑' }));
     expect(speechInputMock.instances[0].stopped).toBe(true);
     expect(chatPayload(fetchMock, 0).messages.at(-1)?.content).toBe('Please review: the new phrase');
+  });
+
+  it('expands the composer for multiple lines and scrolls long live dictation to the newest text', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    const textarea = screen.getByRole('textbox', { name: 'Message' }) as HTMLTextAreaElement;
+    Object.defineProperty(textarea, 'scrollHeight', { configurable: true, get: () => Math.max(44, Math.ceil(textarea.value.length / 24) * 24) });
+    fireEvent.change(textarea, { target: { value: 'First line\nSecond line\nThird line' } });
+    await waitFor(() => expect(document.querySelector('.composer-field')).toHaveStyle({ height: '48px' }));
+
+    fireEvent.change(textarea, { target: { value: '' } });
+    await user.click(screen.getByRole('button', { name: 'Mic' }));
+    act(() => speechInputMock.instances[0].callbacks.onTranscript({ committed: 'A long dictated sentence '.repeat(36), interim: '', corrected: null }));
+    const maxHeight = Math.min(320, window.innerHeight * 0.4);
+    await waitFor(() => {
+      expect(parseFloat((document.querySelector('.composer-field') as HTMLElement).style.height)).toBeCloseTo(maxHeight);
+      expect(textarea.style.overflowY).toBe('auto');
+      expect(textarea.scrollTop).toBeGreaterThan(0);
+      expect(document.querySelector('.composer-preview-content')).toHaveStyle({ transform: `translateY(-${textarea.scrollTop}px)` });
+    });
   });
 
   it('shows deleted words separately and expires the correction after five seconds even as new words arrive', async () => {

@@ -1,4 +1,4 @@
-import { FormEvent, useCallback, useEffect, useRef, useState } from 'react';
+import { FormEvent, ReactNode, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { accessibleTextColor, COLOR_CSS_VARIABLES, COLOR_TARGETS, ColorPreferences, ColorTarget, contrastRatio, DEFAULT_COLORS, initialScale, initialTheme, parseColor, readSavedColors, Theme, UI_TOOL_DECLARATIONS, UiAction, validateUiAction } from './uiTools';
@@ -29,6 +29,15 @@ function preferences(theme: string, scale: number): { theme: string; fontScale: 
 function toolArguments(raw: unknown): unknown {
   if (typeof raw !== 'string') return raw;
   try { return JSON.parse(raw); } catch { return null; }
+}
+
+function draftPreview(content: string, correction: TranscriptCorrection | null, dictatedStart: number): ReactNode {
+  const correctedText = correction?.after;
+  if (!correctedText) return content;
+  const start = content.lastIndexOf(correctedText);
+  if (start < Math.min(dictatedStart, content.length)) return content;
+  const end = start + correctedText.length;
+  return <>{content.slice(0, start)}<mark className="composer-correction">{correctedText}</mark>{content.slice(end)}</>;
 }
 
 function completedTurns(items: Message[]): Message[] {
@@ -86,6 +95,9 @@ export default function App() {
   const [speech, setSpeech] = useState<SpeechSnapshot>({ messageId: null, phase: 'idle', service: 'idle', detail: '' });
   const speechOutput = useRef<SpeechOutput | null>(null);
   const speechInput = useRef<SpeechInput | null>(null);
+  const composerField = useRef<HTMLDivElement>(null);
+  const composerTextarea = useRef<HTMLTextAreaElement>(null);
+  const composerPreview = useRef<HTMLDivElement>(null);
   const dictationBase = useRef('');
   const correctionTimer = useRef<number | undefined>(undefined);
   const abort = useRef<AbortController | null>(null);
@@ -135,6 +147,24 @@ export default function App() {
     }
   }, [theme]);
   useEffect(() => { tail.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
+  useLayoutEffect(() => {
+    const textarea = composerTextarea.current;
+    const field = composerField.current;
+    if (!textarea || !field) return;
+    const selectionAtEnd = textarea.selectionStart === textarea.value.length && textarea.selectionEnd === textarea.value.length;
+    const previousScrollTop = textarea.scrollTop;
+    const maxHeight = Math.max(44, Math.min(320, window.innerHeight * 0.4));
+    textarea.style.height = 'auto';
+    const desiredHeight = Math.max(44, Math.min(textarea.scrollHeight, maxHeight));
+    textarea.style.height = `${desiredHeight}px`;
+    field.style.height = `${desiredHeight}px`;
+    textarea.style.overflowY = textarea.scrollHeight > desiredHeight ? 'auto' : 'hidden';
+    if (dictationActive || selectionAtEnd) {
+      if (dictationActive) textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+      textarea.scrollTop = textarea.scrollHeight;
+    } else textarea.scrollTop = previousScrollTop;
+    if (composerPreview.current) composerPreview.current.style.transform = `translateY(-${textarea.scrollTop}px)`;
+  }, [input, dictationActive, correction]);
 
   const applyUiAction = useCallback((action: UiAction) => {
     if (action.type === 'set_theme') setTheme(action.theme);
@@ -526,10 +556,14 @@ export default function App() {
       {speech.service === 'ready' && <p className="speech-service" role="status">Brian voice is ready.</p>}
       {error && <p className="error">{error}</p>}
       <form className="composer" onSubmit={send}>
-        <textarea aria-label="Message" placeholder="Message the assistant…" value={input} maxLength={12000}
-          onChange={e => setInput(e.target.value)}
-          onFocus={() => { void checkSession(); }}
-          onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }} />
+        <div className="composer-field" ref={composerField}>
+          <div className="composer-preview" aria-hidden="true"><div className="composer-preview-content" ref={composerPreview}>{draftPreview(input, correction, dictationBase.current.length)}</div></div>
+          <textarea ref={composerTextarea} aria-label="Message" placeholder="Message the assistant…" value={input} maxLength={12000}
+            onChange={e => setInput(e.target.value)}
+            onScroll={e => { if (composerPreview.current) composerPreview.current.style.transform = `translateY(-${e.currentTarget.scrollTop}px)`; }}
+            onFocus={() => { void checkSession(); }}
+            onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }} />
+        </div>
         <button type="button" className="mic" onClick={dictationActive ? stopDictation : interruptAndDictate} disabled={!token} aria-label={micLabel} title={dictationActive ? 'Stop speech recognition' : busy || answerSpeaking ? 'Interrupt and dictate' : 'Dictate'}>
           {micLabel}
         </button>
