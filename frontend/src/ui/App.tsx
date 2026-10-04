@@ -95,6 +95,7 @@ export default function App() {
   const [colorOverrides, setColorOverrides] = useState(readSavedColors);
   const [colorTarget, setColorTarget] = useState<ColorTarget>('pageBackground');
   const [colorChoice, setColorChoice] = useState('#f7f7f5');
+  const [appearanceOpen, setAppearanceOpen] = useState(false);
   const [speech, setSpeech] = useState<SpeechSnapshot>({ messageId: null, phase: 'idle', service: 'idle', detail: '' });
   const speechOutput = useRef<SpeechOutput | null>(null);
   const speechInput = useRef<SpeechInput | null>(null);
@@ -105,6 +106,7 @@ export default function App() {
   const composerField = useRef<HTMLDivElement>(null);
   const composerTextarea = useRef<HTMLTextAreaElement>(null);
   const composerPreview = useRef<HTMLDivElement>(null);
+  const chatContainer = useRef<HTMLElement>(null);
   const dictationBase = useRef('');
   const correctionTimer = useRef<number | undefined>(undefined);
   const abort = useRef<AbortController | null>(null);
@@ -160,7 +162,10 @@ export default function App() {
       setColorOverrides(overrides => ({ ...overrides, ...textColors }));
     }
   }, [theme]);
-  useEffect(() => { tail.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
+  useLayoutEffect(() => {
+    const chat = chatContainer.current;
+    if (chat) chat.scrollTop = chat.scrollHeight;
+  }, [messages]);
   useEffect(() => { latestInput.current = input; }, [input]);
   useLayoutEffect(() => {
     const textarea = composerTextarea.current;
@@ -596,7 +601,10 @@ export default function App() {
   }}>
     <header>
       <a className="brand" href="/">✳ <span>Chat</span></a>
-      <div className="toolbar">
+      <button type="button" className="appearance-toggle" aria-expanded={appearanceOpen} aria-controls="appearance-toolbar" onClick={() => setAppearanceOpen(open => !open)}>
+        Appearance
+      </button>
+      <div id="appearance-toolbar" className={'toolbar' + (appearanceOpen ? ' is-open' : '')}>
         <label>Theme <select value={theme} onChange={e => applyUiAction({ type: 'set_theme', theme: e.target.value as Theme })}>
           <option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option>
         </select></label>
@@ -620,7 +628,7 @@ export default function App() {
         </details>
       </div>
     </header>
-    <section className="chat" aria-live="polite">
+    <section className={'chat' + (messages.length ? ' has-messages' : '')} ref={chatContainer} aria-live="polite">
       {messages.length === 0 ? <div className="welcome">
         <div className="mark">✳</div><h1>What’s on your mind?</h1><p>A helpful assistant, ready when you are.</p>
         <div className="suggestions">{suggestions.map(s =>
@@ -659,8 +667,11 @@ export default function App() {
                 ? <><span title={speech.detail}>Brian voice unavailable.</span> <button type="button" onClick={() => void speechOutput.current?.reconnect()}>Reconnect</button></>
                 : 'Checking Brian voice…'}
         </div>
-        <div className="status-item dictation-status" role="status">{listenerStatus || <span aria-hidden="true">&nbsp;</span>}</div>
-        <div className="status-item webmcp-status" role="status">{webmcp}</div>
+        <div className={'status-item dictation-status' + (listenerStatus ? ' is-active' : '')} role="status">{listenerStatus}</div>
+        <div className="status-item webmcp-status" role="status" aria-label={webmcp}>
+          <span className="desktop-status">{webmcp}</span>
+          <span className="mobile-status" aria-hidden="true">{webmcp === WEBMCP_FALLBACK ? 'No WebMCP' : webmcp}</span>
+        </div>
       </div>
       {error && <p className="error">{error}</p>}
       <form className="composer" onSubmit={send}>

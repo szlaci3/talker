@@ -160,6 +160,18 @@ describe('chat cancellation and recovery', () => {
     expect(row.children[1]).toHaveTextContent('Gemini is listening');
   });
 
+  it('opens and closes the grouped appearance controls', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    const toggle = screen.getByRole('button', { name: 'Appearance' });
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    await user.click(toggle);
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    expect(document.querySelector('#appearance-toolbar')).toHaveClass('is-open');
+    await user.click(toggle);
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  });
+
   it('keeps Live active, auto-sends after four seconds of silence, counts down, and speaks the full answer', async () => {
     fetchMock.mockResolvedValueOnce(eventStream({ delta: 'LIVE_ANSWER' }));
     const user = userEvent.setup();
@@ -647,7 +659,7 @@ describe('conversational appearance tools', () => {
     try {
       render(<App />);
       await waitFor(() => expect(registerTool).toHaveBeenCalledTimes(5));
-      expect(screen.getByText('WebMCP tools active')).toBeInTheDocument();
+      expect(screen.getByRole('status', { name: 'WebMCP tools active' })).toBeInTheDocument();
       const colorTool = registered.find(tool => tool.name === 'set_ui_color');
       const execute = colorTool?.execute as (input: unknown) => { ok: boolean };
       const result = execute({ target: 'composerBackground', color: '#123456' });
