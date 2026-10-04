@@ -5,6 +5,7 @@ import App from './App';
 import type { TranscriptUpdate } from './speechInput';
 
 const speechInputMock = vi.hoisted(() => ({ instances: [] as Array<{ callbacks: { onTranscript: (update: TranscriptUpdate) => void; onStatus: (status: string) => void }; stopped: boolean }> }));
+const speechOutputMock = vi.hoisted(() => ({ instances: [] as Array<{ phase: string; messageId: string | null }> }));
 vi.mock('./speechInput', () => ({ SpeechInput: class {
   readonly callbacks: typeof speechInputMock.instances[number]['callbacks'];
   stopped = false;
@@ -14,6 +15,18 @@ vi.mock('./speechInput', () => ({ SpeechInput: class {
   }
   async start() { this.callbacks.onStatus('Listening'); }
   stop() { this.stopped = true; }
+} }));
+vi.mock('./speechOutput', () => ({ SpeechOutput: class {
+  phase = 'idle';
+  messageId: string | null = null;
+  constructor(_api: string, _getToken: () => string, private onSnapshot: (value: { messageId: string | null; phase: string; service: string; detail: string }) => void) {
+    speechOutputMock.instances.push(this);
+  }
+  snapshot() { return { messageId: this.messageId, phase: this.phase, service: 'idle', detail: '' }; }
+  async warmup() {}
+  toggle(messageId: string) { this.messageId = messageId; this.phase = 'speaking-browser'; this.onSnapshot(this.snapshot()); }
+  stop() { this.phase = 'idle'; this.onSnapshot(this.snapshot()); }
+  dispose() { this.stop(); }
 } }));
 
 function eventStream(...events: Array<Record<string, unknown>>) {
@@ -113,6 +126,7 @@ describe('chat cancellation and recovery', () => {
 
   beforeEach(() => {
     speechInputMock.instances = [];
+    speechOutputMock.instances = [];
     sessionStorage.setItem('chat-token', 'test-session-token');
     sessionCheck = vi.fn(async () => new Response('{}', { status: 200 }));
     fetchMock = mockApi(sessionCheck);
@@ -193,7 +207,7 @@ describe('chat cancellation and recovery', () => {
     expect(chatPayload(fetchMock, 0).messages.at(-1)?.content).toBe('Draft: first words more words');
   });
 
-  it('marks a pre-token cancellation and excludes that unanswered question from the next request', async () => {
+  it('keeps a pre-token interruption and tells the next response it ended before any answer text', async () => {
     fetchMock.mockImplementationOnce((_input: RequestInfo | URL, init?: RequestInit) =>
       new Promise((_resolve, reject) => {
         init?.signal?.addEventListener('abort', () => {
@@ -209,7 +223,7 @@ describe('chat cancellation and recovery', () => {
     await user.click(screen.getByRole('button', { name: '↑' }));
     await user.click(await screen.findByRole('button', { name: 'Interrupt' }));
 
-    expect(await screen.findByText('Canceled before a response')).toBeInTheDocument();
+    expect(await screen.findByText('Interrupted')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Mute' })).toBeInTheDocument();
     await user.type(screen.getByRole('textbox', { name: 'Message' }), 'How many r letters are in strawberry?');
     await user.click(screen.getByRole('button', { name: '↑' }));
@@ -217,11 +231,13 @@ describe('chat cancellation and recovery', () => {
 
     await waitFor(() => expect(fetchMock.mock.calls.filter(([url]) => String(url).endsWith('/api/chat'))).toHaveLength(2));
     expect(chatPayload(fetchMock, 1).messages).toEqual([
+      { role: 'user', content: 'Explain the causes in detail' },
+      { role: 'assistant', content: '[Interrupted before any answer text was displayed.]' },
       { role: 'user', content: 'How many r letters are in strawberry?' },
     ]);
   });
 
-  it('keeps partial output marked as stopped and rebuilds the next request from completed visible turns', async () => {
+  it('keeps partial output marked Interrupted and rebuilds context through the exact visible cutoff', async () => {
     fetchMock.mockResolvedValueOnce(eventStream({ delta: 'FIRST_ANSWER' }));
     fetchMock.mockImplementationOnce((_input: RequestInfo | URL, init?: RequestInit) =>
       Promise.resolve(responseAfterAbort(init?.signal as AbortSignal | undefined, 'PARTIAL_ANSWER'))
@@ -239,11 +255,10 @@ describe('chat cancellation and recovery', () => {
     await user.click(screen.getByRole('button', { name: '↑' }));
     expect(await screen.findByText('PARTIAL_ANSWER')).toBeInTheDocument();
     await user.click(await screen.findByRole('button', { name: 'Interrupt' }));
-    expect(await screen.findByText('Stopped')).toBeInTheDocument();
-    expect(screen.getAllByText('Stopped')).toHaveLength(1);
-    expect(screen.queryByText('Canceled before a response')).not.toBeInTheDocument();
-    expect(screen.getByText('Give a detailed account of the consequences').closest('article')).toHaveClass('stale');
-    expect(screen.getByText('PARTIAL_ANSWER').closest('article')).toHaveClass('stale');
+    expect(await screen.findByText('Interrupted')).toBeInTheDocument();
+    expect(screen.getAllByText('Interrupted')).toHaveLength(1);
+    expect(screen.getByText('Give a detailed account of the consequences').closest('article')).not.toHaveClass('stale');
+    expect(screen.getByText('PARTIAL_ANSWER').closest('article')).not.toHaveClass('stale');
 
     await user.type(textbox, 'What were the consequences?');
     await user.click(screen.getByRole('button', { name: '↑' }));
@@ -252,7 +267,32 @@ describe('chat cancellation and recovery', () => {
     expect(chatPayload(fetchMock, 2).messages).toEqual([
       { role: 'user', content: 'Explain the Thirty Years’ War' },
       { role: 'assistant', content: 'FIRST_ANSWER' },
+      { role: 'user', content: 'Give a detailed account of the consequences' },
+      { role: 'assistant', content: '[Interrupted. The answer ended at this exact visible cutoff; no later text was shown.]\n\nPARTIAL_ANSWER' },
       { role: 'user', content: 'What were the consequences?' },
+    ]);
+  });
+
+  it('keeps a completed answer in context when only speech playback is stopped', async () => {
+    fetchMock.mockResolvedValueOnce(eventStream({ delta: 'COMPLETE_ANSWER' }));
+    fetchMock.mockResolvedValueOnce(eventStream({ delta: 'FOLLOW_UP' }));
+    const user = userEvent.setup();
+    render(<App />);
+    const textbox = screen.getByRole('textbox', { name: 'Message' });
+    await user.type(textbox, 'First question');
+    await user.click(screen.getByRole('button', { name: '↑' }));
+    expect(await screen.findByText('COMPLETE_ANSWER')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Play' }));
+    await user.click(screen.getByRole('button', { name: 'Stop' }));
+    expect(screen.getByText('COMPLETE_ANSWER').closest('article')).not.toHaveTextContent('Interrupted');
+
+    await user.type(textbox, 'Follow up');
+    await user.click(screen.getByRole('button', { name: '↑' }));
+    expect(await screen.findByText('FOLLOW_UP')).toBeInTheDocument();
+    expect(chatPayload(fetchMock, 1).messages).toEqual([
+      { role: 'user', content: 'First question' },
+      { role: 'assistant', content: 'COMPLETE_ANSWER' },
+      { role: 'user', content: 'Follow up' },
     ]);
   });
 

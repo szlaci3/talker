@@ -10,7 +10,7 @@ type Message = {
   id: string;
   role: 'user' | 'assistant';
   content: string;
-  status?: 'pending' | 'complete' | 'interrupted' | 'canceled';
+  status?: 'pending' | 'complete' | 'interrupted';
 };
 
 const API = import.meta.env.VITE_API_URL || 'http://localhost:8080';
@@ -37,14 +37,27 @@ function completedTurns(items: Message[]): Message[] {
 
   for (const message of items) {
     if (message.role === 'user') {
-      // A newer user turn supersedes an unanswered turn left by a cancellation.
+      // Include an interrupted user turn even when generation stopped before text arrived.
+      if (pendingUser) {
+        turns.push(pendingUser);
+        if (pendingUser.status === 'interrupted') turns.push({ id: `${pendingUser.id}-cutoff`, role: 'assistant', content: '[Interrupted before any answer text was displayed.]' });
+      }
       pendingUser = message;
     } else {
-      if (pendingUser && message.status === 'complete' && pendingUser.content.trim() && message.content.trim()) {
-        turns.push(pendingUser, message);
+      if (pendingUser?.content.trim()) {
+        turns.push(pendingUser);
+        if (message.status === 'complete' && message.content.trim()) {
+          turns.push(message);
+        } else if (message.status === 'interrupted') {
+          turns.push({ ...message, content: `[Interrupted. The answer ended at this exact visible cutoff; no later text was shown.]\n\n${message.content}` });
+        }
       }
       pendingUser = undefined;
     }
+  }
+  if (pendingUser?.content.trim()) {
+    turns.push(pendingUser);
+    if (pendingUser.status === 'interrupted') turns.push({ id: `${pendingUser.id}-cutoff`, role: 'assistant', content: '[Interrupted before any answer text was displayed.]' });
   }
   return turns;
 }
@@ -375,7 +388,7 @@ export default function App() {
         return cur.flatMap(m => {
           if ((x as Error).message === 'Your session expired. Enter the code again.' && m.id === userId) return [];
           if (m.id === userId && canceled) {
-            return [{ ...m, status: hasPartialAnswer ? 'interrupted' as const : 'canceled' as const }];
+            return [{ ...m, status: 'interrupted' as const }];
           }
           if (m.id !== assistantId) return [m];
           return m.content.trim() ? [{ ...m, status: 'interrupted' as const }] : [];
@@ -480,8 +493,8 @@ export default function App() {
         <div className="suggestions">{suggestions.map(s =>
           <button key={s} onClick={() => send(undefined, s)}>{s}<span>↗</span></button>
         )}</div>
-      </div> : messages.map(m =>
-        <article className={'message ' + m.role + (m.status === 'canceled' || m.status === 'interrupted' ? ' stale' : '')} key={m.id}>
+      </div> : messages.map((m, index) =>
+        <article className={'message ' + m.role} key={m.id}>
           <div className="avatar">{m.role === 'user' ? 'Y' : '✳'}</div>
           <div className="content">
             {m.role === 'assistant' && m.content
@@ -496,8 +509,8 @@ export default function App() {
               {speech.messageId === m.id && ['loading', 'speaking-edge', 'speaking-browser', 'paused'].includes(speech.phase) && <button type="button" onClick={() => speechOutput.current?.stop()}>Stop</button>}
               {speech.messageId === m.id && speech.detail && <span role="status">{speech.detail}</span>}
             </div>}
-            {m.status === 'canceled' && <span className="turn-status">Canceled before a response</span>}
-            {m.role === 'assistant' && m.status === 'interrupted' && <span className="turn-status">Stopped</span>}
+            {m.role === 'user' && m.status === 'interrupted' && messages[index + 1]?.status !== 'interrupted' && <span className="turn-status"><strong>Interrupted</strong> before a response</span>}
+            {m.role === 'assistant' && m.status === 'interrupted' && <span className="turn-status"><strong>Interrupted</strong></span>}
           </div>
         </article>
       )}
