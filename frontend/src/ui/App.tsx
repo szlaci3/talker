@@ -58,6 +58,7 @@ export default function App() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [dictationStatus, setDictationStatus] = useState('');
+  const [dictationActive, setDictationActive] = useState(false);
   const [correction, setCorrection] = useState<TranscriptCorrection | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -86,6 +87,7 @@ export default function App() {
       speechOutput.current?.stop();
       speechInput.current?.stop();
       speechInput.current = null;
+      setDictationActive(false);
       setDictationStatus('');
     }
   }, [token]);
@@ -279,9 +281,7 @@ export default function App() {
     const body = text.trim();
     if (!body || abort.current || !token) return;
 
-    speechInput.current?.stop();
-    speechInput.current = null;
-    setDictationStatus('');
+    stopDictation();
     setCorrection(null);
     window.clearTimeout(correctionTimer.current);
 
@@ -389,6 +389,14 @@ export default function App() {
     }
   }
 
+  function stopDictation() {
+    const controller = speechInput.current;
+    speechInput.current = null;
+    controller?.stop();
+    setDictationActive(false);
+    setDictationStatus('');
+  }
+
   function startDictation() {
     speechInput.current?.stop();
     speechOutput.current?.stop();
@@ -397,8 +405,9 @@ export default function App() {
     dictationBase.current = input;
     setError('');
     const inputController = new SpeechInput(API, () => sessionStorage.getItem('chat-token') || '', {
-      onStatus: setDictationStatus,
+      onStatus: status => { if (speechInput.current === inputController) setDictationStatus(status); },
       onTranscript: update => {
+        if (speechInput.current !== inputController) return;
         const dictated = [update.committed, update.interim].filter(Boolean).join(' ').slice(0, Math.max(0, 12000 - dictationBase.current.length));
         setInput(dictationBase.current && dictated
           ? dictationBase.current + (/\s$/.test(dictationBase.current) ? '' : ' ') + dictated
@@ -411,6 +420,7 @@ export default function App() {
       },
     });
     speechInput.current = inputController;
+    setDictationActive(true);
     void inputController.start();
   }
 
@@ -421,6 +431,7 @@ export default function App() {
   }
 
   const answerSpeaking = speech.phase === 'loading' || speech.phase === 'speaking-edge' || speech.phase === 'speaking-browser' || speech.phase === 'paused';
+  const micLabel = dictationActive ? 'Mute' : busy || answerSpeaking ? 'Interrupt' : 'Mic';
 
   if (!token) {
     return <main className="gate">
@@ -503,8 +514,8 @@ export default function App() {
           onChange={e => setInput(e.target.value)}
           onFocus={() => { void checkSession(); }}
           onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }} />
-        <button type="button" className="mic" onClick={interruptAndDictate} disabled={!token} aria-label={busy || answerSpeaking ? 'Interrupt' : 'Mic'} title={busy || answerSpeaking ? 'Interrupt and dictate' : 'Dictate'}>
-          {busy || answerSpeaking ? 'Interrupt' : 'Mic'}
+        <button type="button" className="mic" onClick={dictationActive ? stopDictation : interruptAndDictate} disabled={!token} aria-label={micLabel} title={dictationActive ? 'Stop speech recognition' : busy || answerSpeaking ? 'Interrupt and dictate' : 'Dictate'}>
+          {micLabel}
         </button>
         <button type="submit" disabled={!input.trim() || busy}>↑</button>
       </form>

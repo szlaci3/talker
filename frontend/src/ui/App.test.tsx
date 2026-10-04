@@ -159,6 +159,40 @@ describe('chat cancellation and recovery', () => {
     }
   });
 
+  it.each(['Connecting to Gemini Live…', 'Listening'])('mutes during %s, keeps the draft, and resumes dictation without late updates', async status => {
+    const user = userEvent.setup();
+    render(<App />);
+    const textbox = screen.getByRole('textbox', { name: 'Message' });
+    await user.type(textbox, 'Draft:');
+    await user.click(screen.getByRole('button', { name: 'Mic' }));
+    const first = speechInputMock.instances[0];
+    act(() => first.callbacks.onStatus(status));
+    act(() => first.callbacks.onTranscript({ committed: '', interim: 'first words', corrected: null }));
+    expect(textbox).toHaveValue('Draft: first words');
+    await user.click(screen.getByRole('button', { name: 'Mute' }));
+    expect(first.stopped).toBe(true);
+    expect(screen.getByRole('button', { name: 'Mic' })).toBeInTheDocument();
+    expect(screen.queryByText(status)).not.toBeInTheDocument();
+    expect(textbox).toHaveValue('Draft: first words');
+    expect(fetchMock).not.toHaveBeenCalled();
+    act(() => {
+      first.callbacks.onTranscript({ committed: 'late words', interim: '', corrected: null });
+      first.callbacks.onStatus('Late error');
+    });
+    expect(textbox).toHaveValue('Draft: first words');
+    expect(screen.queryByText('Late error')).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Mic' }));
+    const second = speechInputMock.instances[1];
+    act(() => first.callbacks.onTranscript({ committed: 'stale restart', interim: '', corrected: null }));
+    act(() => second.callbacks.onTranscript({ committed: 'more words', interim: '', corrected: null }));
+    expect(textbox).toHaveValue('Draft: first words more words');
+    fetchMock.mockResolvedValueOnce(eventStream({ delta: 'Reply.' }));
+    await user.click(screen.getByRole('button', { name: '↑' }));
+    expect(second.stopped).toBe(true);
+    expect(await screen.findByRole('button', { name: 'Mic' })).toBeInTheDocument();
+    expect(chatPayload(fetchMock, 0).messages.at(-1)?.content).toBe('Draft: first words more words');
+  });
+
   it('marks a pre-token cancellation and excludes that unanswered question from the next request', async () => {
     fetchMock.mockImplementationOnce((_input: RequestInfo | URL, init?: RequestInit) =>
       new Promise((_resolve, reject) => {
@@ -176,6 +210,7 @@ describe('chat cancellation and recovery', () => {
     await user.click(await screen.findByRole('button', { name: 'Interrupt' }));
 
     expect(await screen.findByText('Canceled before a response')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Mute' })).toBeInTheDocument();
     await user.type(screen.getByRole('textbox', { name: 'Message' }), 'How many r letters are in strawberry?');
     await user.click(screen.getByRole('button', { name: '↑' }));
     expect(await screen.findByText('STRAWBERRY_REPLY')).toBeInTheDocument();

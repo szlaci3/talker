@@ -44,7 +44,7 @@ class FakeAudioContext {
   processor = { onaudioprocess: null as ((event: AudioProcessingEvent) => void) | null, connect: vi.fn(), disconnect: vi.fn() } as unknown as ScriptProcessorNode;
   source = { connect: vi.fn(), disconnect: vi.fn() } as unknown as MediaStreamAudioSourceNode;
   gain = { gain: { value: 1 }, connect: vi.fn(), disconnect: vi.fn() } as unknown as GainNode;
-  resume = vi.fn(async () => undefined);
+  resume = vi.fn(async (): Promise<void> => undefined);
   close = vi.fn(async () => undefined);
   createMediaStreamSource = vi.fn(() => this.source);
   createScriptProcessor = vi.fn(() => this.processor);
@@ -215,5 +215,45 @@ describe('Gemini Live dictation', () => {
     expect(transcripts.at(-1)).toMatchObject({ committed: 'fallback works' });
     expect(statuses.some(status => status.includes('Google reported invalid token constraints') && status.includes('Continuing in English'))).toBe(true);
     controller.stop();
+    const statusCount = statuses.length;
+    FakeRecognition.instance.onend?.();
+    FakeRecognition.instance.onerror?.({ error: 'network' });
+    FakeRecognition.instance.onresult?.({ resultIndex: 0, results: [{ isFinal: true, 0: { transcript: 'late fallback' } }] });
+    expect(FakeRecognition.instance.stop).toHaveBeenCalledOnce();
+    expect(FakeRecognition.instance.start).toHaveBeenCalledOnce();
+    expect(statuses).toHaveLength(statusCount);
+    expect(transcripts.at(-1)?.committed).toBe('fallback works');
+  });
+
+  it('releases a microphone granted after Mute without starting Live', async () => {
+    const { controller } = setup();
+    let grant!: (value: MediaStream) => void;
+    vi.mocked(navigator.mediaDevices.getUserMedia).mockReturnValueOnce(new Promise(resolve => { grant = resolve; }));
+    const starting = controller.start();
+    controller.stop();
+    grant(stream);
+    await starting;
+    expect(track.stop).toHaveBeenCalledOnce();
+    expect(fetch).not.toHaveBeenCalled();
+    expect(statuses).toEqual(['Connecting to Gemini Live…']);
+  });
+
+  it('does not create audio nodes when Mute is clicked during audio-context startup', async () => {
+    const { controller } = setup();
+    let resumed!: () => void;
+    const pendingResume = new Promise<void>(resolve => { resumed = resolve; });
+    class PendingAudioContext extends FakeAudioContext {
+      resume = vi.fn(() => pendingResume);
+    }
+    Object.defineProperty(window, 'AudioContext', { configurable: true, value: PendingAudioContext });
+    const starting = controller.start();
+    await vi.waitFor(() => expect(FakeAudioContext.latest.resume).toHaveBeenCalled());
+    controller.stop();
+    resumed();
+    await starting;
+    expect(track.stop).toHaveBeenCalledOnce();
+    expect(FakeAudioContext.latest.close).toHaveBeenCalledOnce();
+    expect(FakeAudioContext.latest.createMediaStreamSource).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
   });
 });

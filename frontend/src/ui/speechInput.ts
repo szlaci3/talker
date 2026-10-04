@@ -82,16 +82,23 @@ export class SpeechInput {
     this.callbacks.onStatus('Connecting to Gemini Live…');
     try {
       if (!navigator.mediaDevices?.getUserMedia || typeof WebSocket === 'undefined') throw new Error('Live audio is unavailable in this browser.');
-      this.stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
-      if (!this.isCurrent(current)) return;
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+      if (!this.isCurrent(current)) {
+        stream.getTracks().forEach(track => track.stop());
+        return;
+      }
+      this.stream = stream;
       const AudioContextClass = window.AudioContext;
       this.context = new AudioContextClass();
       await this.context.resume();
+      if (!this.isCurrent(current)) return;
       this.source = this.context.createMediaStreamSource(this.stream);
       this.processor = this.context.createScriptProcessor(2048, 1, 1);
       this.silent = this.context.createGain();
       this.silent.gain.value = 0;
-      this.processor.onaudioprocess = event => this.capture(event.inputBuffer.getChannelData(0), this.context?.sampleRate || 48000);
+      this.processor.onaudioprocess = event => {
+        if (this.isCurrent(current)) this.capture(event.inputBuffer.getChannelData(0), this.context?.sampleRate || 48000);
+      };
       this.source.connect(this.processor);
       this.processor.connect(this.silent);
       this.silent.connect(this.context.destination);
@@ -292,6 +299,7 @@ export class SpeechInput {
         this.publish(null);
       };
       recognition.onerror = event => {
+        if (!this.isCurrent(id) || this.recognition !== recognition) return;
         this.callbacks.onStatus(`English browser recognition error${event.error ? `: ${event.error}` : ''}.`);
         if (['not-allowed', 'service-not-allowed', 'audio-capture'].includes(event.error || '')) {
           this.recognition = null;
