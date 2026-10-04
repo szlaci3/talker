@@ -5,6 +5,7 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import time
 from collections import defaultdict, deque
 from datetime import datetime, timezone
@@ -245,7 +246,6 @@ async def live_token_route(request):
             "config": {
                 "responseModalities": ["TEXT"],
                 "inputAudioTranscription": {"languageCodes": []},
-                "sessionResumption": {},
             },
         },
     }
@@ -256,11 +256,25 @@ async def live_token_route(request):
                 headers={"x-goog-api-key": api_key, "Content-Type": "application/json"},
                 json=payload,
             ) as response:
-                result = await response.json()
-                if response.status >= 400 or not isinstance(result.get("name"), str):
-                    raise ValueError("Token provisioning failed")
+                raw = await response.text()
+                try:
+                    result = json.loads(raw)
+                except (json.JSONDecodeError, TypeError):
+                    result = {}
+                if response.status >= 400:
+                    error = result.get("error", {}) if isinstance(result, dict) else {}
+                    detail = error.get("message", "No provider error details returned.") if isinstance(error, dict) else str(error)
+                    detail = str(detail).replace(api_key, "[redacted]")
+                    detail = re.sub(r"AIza[0-9A-Za-z_-]{20,}", "[redacted]", detail)
+                    detail = " ".join(detail.split())[:400]
+                    message = f"Gemini Live token request was rejected (HTTP {response.status}): {detail}"
+                    raise web.HTTPBadGateway(text=json.dumps({"error": message}), content_type="application/json")
+                if not isinstance(result, dict) or not isinstance(result.get("name"), str):
+                    raise ValueError("Google returned an invalid ephemeral-token response.")
+    except web.HTTPBadGateway:
+        raise
     except Exception:
-        raise web.HTTPBadGateway(text='{"error":"Gemini Live could not start. English browser recognition will be used if available."}', content_type="application/json")
+        raise web.HTTPBadGateway(text='{"error":"Gemini Live token service could not be reached. English browser recognition will be used if available."}', content_type="application/json")
     return web.json_response({"token": result["name"]}, headers={"Cache-Control": "no-store"})
 
 

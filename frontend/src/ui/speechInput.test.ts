@@ -100,14 +100,14 @@ describe('Gemini Live dictation', () => {
       stop = vi.fn();
       constructor() { FakeRecognition.instance = this; }
     }
-    const { controller } = setup(new Response('{}', { status: 502 }));
+    const { controller } = setup(Response.json({ error: 'Google reported invalid token constraints.' }, { status: 502 }));
     Object.defineProperty(window, 'SpeechRecognition', { configurable: true, value: FakeRecognition });
     await controller.start();
     expect(FakeRecognition.instance.lang).toBe('en-US');
     expect(FakeRecognition.instance.continuous).toBe(true);
     FakeRecognition.instance.onresult?.({ resultIndex: 0, results: [{ isFinal: true, 0: { transcript: 'fallback works' } }] });
     expect(transcripts.at(-1)).toMatchObject({ committed: 'fallback works' });
-    expect(statuses.some(status => status.includes('Continuing in English'))).toBe(true);
+    expect(statuses.some(status => status.includes('Google reported invalid token constraints') && status.includes('Continuing in English'))).toBe(true);
     controller.stop();
   });
 });

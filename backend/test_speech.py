@@ -23,6 +23,7 @@ class FakeCommunicate:
 
 class FakeTokenResponse:
     status = 200
+    body = {"name": "single-use-live-token"}
 
     async def __aenter__(self):
         return self
@@ -30,8 +31,9 @@ class FakeTokenResponse:
     async def __aexit__(self, *_args):
         return False
 
-    async def json(self):
-        return {"name": "single-use-live-token"}
+    async def text(self):
+        import json
+        return json.dumps(self.body)
 
 
 class FakeTokenClient:
@@ -63,6 +65,8 @@ class SpeechRoutesTest(unittest.IsolatedAsyncioTestCase):
         self.env = patch.dict(os.environ, {"SESSION_SECRET": "test-secret-value-with-at-least-32-bytes", "ALLOWED_ORIGINS": "http://localhost:5173"})
         self.env.start()
         FakeTokenClient.calls.clear()
+        FakeTokenResponse.status = 200
+        FakeTokenResponse.body = {"name": "single-use-live-token"}
         FakeCommunicate.calls.clear()
         server.speech_catalogue = []
         server.speech_catalogue_at = 0
@@ -127,7 +131,18 @@ class SpeechRoutesTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(constraints["model"], "models/gemini-3.5-transcribe-live")
         self.assertEqual(constraints["config"]["responseModalities"], ["TEXT"])
         self.assertEqual(constraints["config"]["inputAudioTranscription"]["languageCodes"], [])
-        self.assertIn("sessionResumption", constraints["config"])
+        self.assertNotIn("sessionResumption", constraints["config"])
+
+    async def test_live_token_provider_error_is_actionable_and_redacts_the_api_key(self):
+        FakeTokenResponse.status = 400
+        FakeTokenResponse.body = {"error": {"message": "API key server-only-test-google-key cannot use this configuration."}}
+        with patch.dict(os.environ, {"GOOGLE_API_KEY": "server-only-test-google-key"}), patch.object(server, "ClientSession", FakeTokenClient):
+            response = await self.client.post("/api/live-token", headers=self.headers())
+        self.assertEqual(response.status, 502)
+        error = (await response.json())["error"]
+        self.assertIn("HTTP 400", error)
+        self.assertIn("cannot use this configuration", error)
+        self.assertNotIn("server-only-test-google-key", error)
 
 
 if __name__ == "__main__":

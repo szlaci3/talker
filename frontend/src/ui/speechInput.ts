@@ -108,7 +108,10 @@ export class SpeechInput {
     const response = await fetch(this.api + '/api/live-token', {
       method: 'POST', headers: { Authorization: 'Bearer ' + this.getToken() },
     });
-    if (!response.ok) throw new Error('Could not obtain a secure Live session.');
+    if (!response.ok) {
+      const failure = await response.json().catch(() => ({})) as { error?: unknown };
+      throw new Error(typeof failure.error === 'string' ? failure.error : 'Could not obtain a secure Live session.');
+    }
     const { token } = await response.json() as { token?: string };
     if (!token || !this.isCurrent(id)) throw new Error('Live session token was unavailable.');
     await new Promise<void>((resolve, reject) => {
