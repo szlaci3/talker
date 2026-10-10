@@ -104,10 +104,11 @@ function chatPayload(fetchMock: ReturnType<typeof vi.fn>, index: number) {
 describe('Dialog integration', () => {
   beforeEach(() => { sessionStorage.setItem('chat-token', 'test-session-token'); mockApi(); });
 
-  it('keeps Live available, shows Dialog transcripts, applies shared tools and ends on another action', async () => {
+  it('hides Live, shows Dialog transcripts, applies shared tools and ends on another action', async () => {
     const user = userEvent.setup();
     render(<App />);
-    expect(screen.getByRole('button', { name: 'Start Live' })).toBeEnabled();
+    expect(screen.queryByRole('button', { name: 'Start Live' })).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Start Live')).not.toBeVisible();
     await user.click(screen.getByRole('button', { name: 'Start Dialog' }));
     expect(screen.getByText('Dialog is listening')).toBeInTheDocument();
     const controller = dialogMock.latest!;
@@ -236,9 +237,9 @@ describe('chat cancellation and recovery', () => {
 
   it('keeps Live active, auto-sends after four seconds of silence, counts down, and speaks the full answer', async () => {
     fetchMock.mockResolvedValueOnce(eventStream({ delta: 'LIVE_ANSWER' }));
-    const user = userEvent.setup();
     render(<App />);
-    await user.click(screen.getByRole('button', { name: 'Start Live' }));
+    // Exercise retained Live logic directly while its control is hidden.
+    fireEvent.click(screen.getByLabelText('Start Live'));
     const recognizer = speechInputMock.instances[0];
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date'] });
     act(() => {
@@ -255,11 +256,11 @@ describe('chat cancellation and recovery', () => {
       expect(chatPayload(fetchMock, 0).messages.at(-1)?.content).toBe('What is the weather like?');
       expect(await screen.findByText('LIVE_ANSWER')).toBeInTheDocument();
       expect(speechOutputMock.instances[0].plays.at(-1)?.[1]).toBe('LIVE_ANSWER');
-      expect(screen.getByRole('button', { name: 'End Live' })).toBeInTheDocument();
+      expect(screen.getByLabelText('End Live')).toBeInTheDocument();
       expect(recognizer.stopped).toBe(false);
       expect(screen.getByRole('button', { name: 'Pause' })).toBeInTheDocument();
       fireEvent.click(screen.getByRole('button', { name: 'Pause' }));
-      expect(screen.queryByRole('button', { name: 'End Live' })).not.toBeInTheDocument();
+      expect(screen.queryByLabelText('End Live')).not.toBeInTheDocument();
       expect(screen.getByRole('button', { name: 'Resume' })).toBeInTheDocument();
       fireEvent.click(screen.getByRole('button', { name: 'Resume' }));
       expect(screen.getByRole('button', { name: 'Stop' })).toBeInTheDocument();
@@ -274,9 +275,8 @@ describe('chat cancellation and recovery', () => {
   it('lets speech interrupt playback, keeps the complete answer, and uses the next utterance as a new turn', async () => {
     fetchMock.mockResolvedValueOnce(eventStream({ delta: 'COMPLETE_LIVE_ANSWER' }));
     fetchMock.mockResolvedValueOnce(eventStream({ delta: 'SECOND_LIVE_ANSWER' }));
-    const user = userEvent.setup();
     render(<App />);
-    await user.click(screen.getByRole('button', { name: 'Start Live' }));
+    fireEvent.click(screen.getByLabelText('Start Live'));
     const recognizer = speechInputMock.instances[0];
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date'] });
     act(() => {
@@ -301,7 +301,7 @@ describe('chat cancellation and recovery', () => {
         { role: 'user', content: 'Next question' },
       ]);
       expect(await screen.findByText('SECOND_LIVE_ANSWER')).toBeInTheDocument();
-      expect(screen.getByRole('button', { name: 'End Live' })).toBeInTheDocument();
+      expect(screen.getByLabelText('End Live')).toBeInTheDocument();
     } finally {
       vi.useRealTimers();
     }
@@ -315,11 +315,11 @@ describe('chat cancellation and recovery', () => {
     await user.click(screen.getByRole('button', { name: '↑' }));
     expect(await screen.findByText('OLDER_ANSWER')).toBeInTheDocument();
 
-    await user.click(screen.getByRole('button', { name: 'Start Live' }));
-    expect(screen.getByRole('button', { name: 'End Live' })).toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText('Start Live'));
+    expect(screen.getByLabelText('End Live')).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Play' }));
 
-    expect(screen.queryByRole('button', { name: 'End Live' })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('End Live')).not.toBeInTheDocument();
     expect(speechInputMock.instances[0].stopped).toBe(true);
     expect(speechOutputMock.instances[0].toggles.at(-1)?.[1]).toBe('OLDER_ANSWER');
     expect(speechOutputMock.instances[0].phase).toBe('speaking-browser');

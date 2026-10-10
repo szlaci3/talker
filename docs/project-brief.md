@@ -1,8 +1,10 @@
 # Portfolio chat: project brief
 
-Updated: 2026-10-04. Status: Talker milestone 1 is deployed; user reports successful Antigravity chat, multi-turn context, cancellation/recovery, cold-start, and 28 requests in one day without quota problems. Decision: do not implement a Gemini fallback for chat; Antigravity remains the sole chat provider. Recommendations below are proposed defaults, not additional user commitments. Current checks and next steps live in [implementation-status.md](implementation-status.md); execution details live in [implementation-handover.md](implementation-handover.md).
+Updated: 2026-10-10. Status: Talker milestone 1 is deployed; user reports successful Antigravity chat, multi-turn context, cancellation/recovery, cold-start, and 28 requests in one day without quota problems. Decision: do not implement a Gemini fallback for chat; Antigravity remains the sole chat provider. Recommendations below are proposed defaults, not additional user commitments. Current checks and next steps live in [implementation-status.md](implementation-status.md); execution details live in [implementation-handover.md](implementation-handover.md).
 
 ## User requirements
+
+- Live visibility decision (2026-10-10): hide the Live button while retaining its implementation and regression coverage. Dialog remains available. This supersedes the earlier requirement to expose a separate Live button. Future decision required: either remove the Live-specific code and tests or un-hide the control. Preserve shared microphone/transcription and playback code used by Dictation, Dialog, and typed chat if Live is removed.
 
 - Dialog (2026-10-10): keep the existing Live feature and add a separate native speech-to-speech mode. The originally requested `gemini-2.5-flash-preview-native-audio-dialog` was shut down on October 20, 2025; after reviewing Google's release notes, the user selected `gemini-2.5-flash-native-audio-preview-12-2025`. The user confirms the existing Google project still has billing disabled. Accepted implementation discretion: use Gemini's native voice (Aoede), automatic provider turn detection, streamed input/output transcripts in the same chat, natural voice interruption, and the same validated appearance tools. Preserve any unsent composer draft; clicking another control ends Dialog then performs that action. Dialog history is supplied from the visible conversation when starting; typed chat and Live keep Antigravity/Brian. Model/quota failures stop Dialog without a provider or paid-tier fallback. Preview availability is time-limited; Google's [deprecations table](https://ai.google.dev/gemini-api/docs/deprecations/) currently lists November 17, 2026 as the earliest shutdown for the selected model. [Release notes](https://ai.google.dev/gemini-api/docs/changelog), [native audio capabilities](https://ai.google.dev/gemini-api/docs/live-api/capabilities), [pricing](https://ai.google.dev/gemini-api/docs/pricing).
 
@@ -20,6 +22,10 @@ Updated: 2026-10-04. Status: Talker milestone 1 is deployed; user reports succes
 - Use the Antigravity managed agent as the production provider. The user reports higher daily and per-minute token quotas for it than for direct Gemini and has decided not to implement Gemini fallback.
 - Host the frontend on Netlify; the user favors a Render backend for the server-side API and `edge-tts`.
 - Add light entry friction against bots. The proposed code starts at 11 and increments daily beyond 99; typing the current date was another possibility. The mechanism remains open for review.
+
+## Future voice plan
+
+- Dialog replay recommendation, recorded for future implementation (2026-10-10): retain the original Gemini audio alongside each Dialog answer in bounded browser memory. Play should replay that audio with Pause/Resume/Stop, preserving the original voice and delivery and avoiding a new synthesis/model request or additional model quota. Replay should remain available after ending Dialog; clear recordings on page reload along with the conversation. Interrupted answers may replay only the audio received before interruption. Keep Brian/browser speech for answers without a retained Gemini recording, including typed chat and any restored Live mode. This is a future plan; current Play still uses Brian/browser speech. Define a memory cap and eviction behavior when implementing it.
 
 ## Recommended architecture
 

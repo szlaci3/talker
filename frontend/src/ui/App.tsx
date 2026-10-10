@@ -745,7 +745,8 @@ export default function App() {
         <button type="button" className="mic" onClick={dictationActive && !liveActive ? stopDictation : startDictation} disabled={!token || liveActive || busy || answerSpeaking} aria-label={micLabel} title={dictationActive && !liveActive ? 'Stop dictation' : 'Start dictation'}>
           {micLabel}
         </button>
-        <button type="button" className={'live' + (liveActive ? ' active' : '')} onClick={startLive} disabled={!token || (!liveActive && (dictationActive || busy || answerSpeaking))} aria-label={liveActive ? 'End Live' : 'Start Live'} title={liveActive ? 'End live voice conversation' : 'Start live voice conversation'}>
+        {/* Hidden pending a decision to remove Live or restore its control; see project-brief.md. */}
+        <button hidden type="button" className={'live' + (liveActive ? ' active' : '')} onClick={startLive} disabled={!token || (!liveActive && (dictationActive || busy || answerSpeaking))} aria-label={liveActive ? 'End Live' : 'Start Live'} title={liveActive ? 'End live voice conversation' : 'Start live voice conversation'}>
           {liveActive ? 'End Live' : 'Live'}
         </button>
         <button type="button" className={'dialog' + (dialogActive ? ' active' : '')} onClick={startDialog} disabled={!token} aria-label={dialogActive ? 'End Dialog' : 'Start Dialog'} title={dialogActive ? 'End Gemini voice dialog' : 'Talk directly with Gemini using its native voice'}>
