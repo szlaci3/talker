@@ -255,8 +255,8 @@ async def live_token_route(request):
         },
     }
     if dialog:
-        model = os.getenv("DIALOG_MODEL", "gemini-2.5-flash-native-audio-preview-12-2025")
-        if model not in {"gemini-2.5-flash-native-audio-preview-12-2025", "gemini-3.8-live"}:
+        model = os.getenv("DIALOG_MODEL", "gemini-2.5-flash-preview-native-audio-dialog")
+        if model not in {"gemini-2.5-flash-native-audio-preview-12-2025", "gemini-2.5-flash-preview-native-audio-dialog", "gemini-3.8-live"}:
             raise web.HTTPServiceUnavailable(text=json.dumps({"error": "The configured Dialog model is unsupported. No alternative model was used."}), content_type="application/json")
         setup = {
             "model": "models/" + model,
