@@ -7,6 +7,13 @@ export type SpeechInputCallbacks = {
   onSpeechEnded?: (silenceElapsedMs?: number) => void;
 };
 
+// Native Dialog shares microphone capture and transport, but owns its responses.
+export type NativeSession = {
+  onMessage: (message: Record<string, any>) => void;
+  onReady: (resumed: boolean) => void;
+  onError: (error: Error) => void;
+};
+
 type SpeechRecognitionResult = { isFinal: boolean; 0: { transcript: string } };
 type SpeechRecognitionEventLike = { resultIndex: number; results: ArrayLike<SpeechRecognitionResult> };
 type SpeechRecognitionLike = {
@@ -75,7 +82,11 @@ export class SpeechInput {
   private loudFrames = 0;
   private quietMs = 0;
 
-  constructor(private api: string, private getToken: () => string, private callbacks: SpeechInputCallbacks) {}
+  constructor(private api: string, private getToken: () => string, private callbacks: SpeechInputCallbacks, private native?: NativeSession) {}
+
+  sendMessage(message: unknown): void {
+    if (this.liveReady && this.socket?.readyState === WebSocket.OPEN) this.socket.send(JSON.stringify(message));
+  }
 
   async start(): Promise<void> {
     if (this.active) return;
@@ -151,14 +162,14 @@ export class SpeechInput {
   private isCurrent(id: number): boolean { return this.active && id === this.generation; }
 
   private async connect(id: number): Promise<void> {
-    const response = await fetch(this.api + '/api/live-token', {
+    const response = await fetch(this.api + (this.native ? '/api/dialog-token' : '/api/live-token'), {
       method: 'POST', headers: { Authorization: 'Bearer ' + this.getToken() },
     });
     if (!response.ok) {
       const failure = await response.json().catch(() => ({})) as { error?: unknown };
       throw new Error(typeof failure.error === 'string' ? failure.error : 'Could not obtain a secure Live session.');
     }
-    const { token } = await response.json() as { token?: string };
+    const { token, setup } = await response.json() as { token?: string; setup?: Record<string, unknown> };
     if (!token || !this.isCurrent(id)) throw new Error('Live session token was unavailable.');
     await new Promise<void>((resolve, reject) => {
       const socket = new WebSocket(`${LIVE_SOCKET}?access_token=${encodeURIComponent(token)}`);
@@ -173,15 +184,17 @@ export class SpeechInput {
         failed = true;
         clearTimeout(setupTimer);
         if (ready) this.fallback(error, id);
-        else reject(error);
+        reject(error);
       };
       const setupTimer = window.setTimeout(() => {
         if (!ready) fail(new Error('Gemini Live setup timed out.'));
       }, 12000);
       socket.onopen = () => { if (isCurrentSocket()) socket.send(JSON.stringify({ setup: {
-        model: LIVE_MODEL,
-        generationConfig: { responseModalities: ['TEXT'] },
-        inputAudioTranscription: { languageCodes: [] },
+        ...(this.native ? setup : {
+          model: LIVE_MODEL,
+          generationConfig: { responseModalities: ['TEXT'] },
+          inputAudioTranscription: { languageCodes: [] },
+        }),
         sessionResumption: this.resumeHandle ? { handle: this.resumeHandle } : {},
       } })); };
       socket.onmessage = event => {
@@ -204,12 +217,19 @@ export class SpeechInput {
           this.liveReady = true;
           clearTimeout(setupTimer);
           this.reconnects = 0;
+          try { this.native?.onReady(Boolean(this.resumeHandle)); }
+          catch (error) { fail(error instanceof Error ? error : new Error('Dialog context could not be restored.')); return; }
           for (const audio of this.queuedAudio.splice(0)) socket.send(audio);
           this.callbacks.onStatus('Gemini is listening');
           resolve();
         }
         const resume = message.sessionResumptionUpdate;
         if (resume?.newHandle) this.resumeHandle = resume.newHandle;
+        if (this.native) {
+          try { this.native.onMessage(message); }
+          catch (error) { fail(error instanceof Error ? error : new Error('Dialog response failed.')); }
+          return;
+        }
         const content = message.serverContent;
         if (!content) return;
         const partial = content.interimInputTranscription?.text;
@@ -229,16 +249,20 @@ export class SpeechInput {
         }
       };
       socket.onerror = () => fail(new Error('Gemini Live connection failed.'));
-      socket.onclose = () => {
+      socket.onclose = event => {
         clearTimeout(setupTimer);
         if (!isCurrentSocket()) return;
         if (!ready) {
           this.socket = null;
-          reject(new Error('Gemini Live closed before session setup completed.'));
+          reject(new Error(this.native && event.reason ? `Dialog setup failed: ${event.reason.slice(0, 300)}` : 'Gemini Live closed before session setup completed.'));
           return;
         }
         this.socket = null;
         this.liveReady = false;
+        if (this.native && event.code && ![1000, 1001, 1006].includes(event.code)) {
+          this.fallback(new Error(`Dialog session closed (${event.code})${event.reason ? ': ' + event.reason.slice(0, 300) : '.'}`), id);
+          return;
+        }
         if (this.resumeHandle && this.reconnects < 2) {
           this.reconnects++;
           window.setTimeout(() => { if (this.isCurrent(id)) void this.connect(id).catch(error => this.fallback(error, id)); }, 350);
@@ -263,7 +287,7 @@ export class SpeechInput {
     }
     const activity = this.detectSpeech(input, sourceRate);
     const encoded = JSON.stringify({ realtimeInput: { audio: { mimeType: 'audio/pcm;rate=16000', data: base64Pcm(new Uint8Array(pcm.buffer)) } } });
-    const packets = activity === 'ended' ? [encoded, JSON.stringify({ realtimeInput: { audioStreamEnd: true } })] : [encoded];
+    const packets = activity === 'ended' && !this.native ? [encoded, JSON.stringify({ realtimeInput: { audioStreamEnd: true } })] : [encoded];
     if (this.liveReady && this.socket?.readyState === WebSocket.OPEN) packets.forEach(packet => this.socket?.send(packet));
     else {
       this.queuedAudio.push(...packets);
@@ -305,6 +329,11 @@ export class SpeechInput {
 
   private fallback(error: unknown, id: number): void {
     if (!this.isCurrent(id)) return;
+    if (this.native) {
+      this.stop();
+      this.native.onError(error instanceof Error ? error : new Error('Dialog connection failed.'));
+      return;
+    }
     const socket = this.socket;
     this.socket = null;
     socket?.close();

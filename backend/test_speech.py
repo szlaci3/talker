@@ -163,6 +163,36 @@ class SpeechRoutesTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("cannot use this configuration", error)
         self.assertNotIn("server-only-test-google-key", error)
 
+    async def test_dialog_token_locks_native_audio_model_tools_and_instructions(self):
+        with patch.dict(os.environ, {"GOOGLE_API_KEY": "server-only-test-google-key", "DIALOG_FREE_TIER_CONFIRMED": "true", "DIALOG_MODEL": "gemini-2.5-flash-native-audio-preview-12-2025"}), patch.object(server, "ClientSession", FakeTokenClient):
+            denied = await self.client.post("/api/dialog-token")
+            self.assertEqual(denied.status, 401)
+            response = await self.client.post("/api/dialog-token", headers=self.headers())
+        self.assertEqual(response.status, 200)
+        body = await response.json()
+        self.assertNotIn("server-only-test-google-key", str(body))
+        setup = body["setup"]
+        self.assertEqual(body["token"], "single-use-live-token")
+        self.assertEqual(setup["model"], "models/gemini-2.5-flash-native-audio-preview-12-2025")
+        self.assertEqual(setup["generationConfig"]["responseModalities"], ["AUDIO"])
+        self.assertEqual(setup["inputAudioTranscription"], {})
+        self.assertEqual(setup["outputAudioTranscription"], {})
+        self.assertEqual(len(setup["tools"][0]["functionDeclarations"]), 5)
+        self.assertEqual(setup["tools"][0]["functionDeclarations"][0]["parametersJsonSchema"], server.UI_TOOLS[0]["parameters"])
+        self.assertIn("systemInstruction", setup)
+        payload = FakeTokenClient.calls[0][1]["json"]
+        self.assertEqual(setup, payload["bidiGenerateContentSetup"])
+        self.assertEqual(set(payload["fieldMask"].split(",")), set(setup))
+        self.assertEqual(payload["uses"], 1)
+        self.assertEqual(response.headers["Cache-Control"], "no-store")
+
+    async def test_dialog_fails_closed_when_free_tier_unconfirmed_or_model_invalid(self):
+        for settings in [{"DIALOG_FREE_TIER_CONFIRMED": "false"}, {"DIALOG_FREE_TIER_CONFIRMED": "true", "DIALOG_MODEL": "gemini-2.5-flash-preview-native-audio-dialog"}]:
+            with patch.dict(os.environ, {"GOOGLE_API_KEY": "server-only-test-google-key", **settings}), patch.object(server, "ClientSession", FakeTokenClient):
+                response = await self.client.post("/api/dialog-token", headers=self.headers())
+            self.assertEqual(response.status, 503)
+        self.assertEqual(FakeTokenClient.calls, [])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { SpeechInput, TranscriptUpdate } from './speechInput';
+import { NativeSession, SpeechInput, TranscriptUpdate } from './speechInput';
 
 function binaryJson(value: unknown): ArrayBuffer {
   return new Uint8Array(new TextEncoder().encode(JSON.stringify(value))).buffer;
@@ -71,7 +71,7 @@ describe('Gemini Live dictation', () => {
     Object.defineProperty(window, 'SpeechRecognition', { configurable: true, value: undefined });
   });
 
-  function setup(tokenResponse: Response = Response.json({ token: 'ephemeral-token' })) {
+  function setup(tokenResponse: Response = Response.json({ token: 'ephemeral-token' }), native?: NativeSession) {
     vi.stubGlobal('WebSocket', FakeSocket);
     vi.stubGlobal('fetch', vi.fn(async () => tokenResponse));
     vi.stubGlobal('AudioContext', FakeAudioContext);
@@ -81,9 +81,30 @@ describe('Gemini Live dictation', () => {
       onStatus: value => statuses.push(value), onTranscript: value => transcripts.push(value),
       onSpeechStarted: () => speechEvents.push('started'),
       onSpeechEnded: elapsed => speechEvents.push(`ended:${elapsed ?? ''}`),
-    });
+    }, native);
     return { controller };
   }
+
+  it('uses constrained Dialog setup, forwards binary audio/tool events, and fails without browser fallback', async () => {
+    const native = { onMessage: vi.fn(), onReady: vi.fn(), onError: vi.fn() };
+    const config = { model: 'models/gemini-2.5-flash-native-audio-preview-12-2025', generationConfig: { responseModalities: ['AUDIO'] }, inputAudioTranscription: {}, outputAudioTranscription: {} };
+    const { controller } = setup(Response.json({ token: 'dialog-token', setup: config }), native);
+    await controller.start();
+    expect(fetch).toHaveBeenCalledWith('http://localhost:8080/api/dialog-token', expect.anything());
+    expect(JSON.parse(FakeSocket.latest.sent[0])).toEqual({ setup: { ...config, sessionResumption: {} } });
+    expect(native.onReady).toHaveBeenCalledWith(false);
+    const content = { serverContent: { modelTurn: { parts: [{ inlineData: { data: 'AAAA', mimeType: 'audio/pcm;rate=24000' } }] } }, toolCall: { functionCalls: [{ id: '1', name: 'reset_ui', args: {} }] } };
+    FakeSocket.latest.receive(content);
+    expect(native.onMessage).toHaveBeenCalledWith(content);
+    const socket = FakeSocket.latest;
+    socket.receive({ error: { message: 'Quota exhausted' } });
+    expect(native.onError).toHaveBeenCalledWith(expect.objectContaining({ message: 'Quota exhausted' }));
+    expect(track.stop).toHaveBeenCalled();
+    const count = native.onMessage.mock.calls.length;
+    socket.receive(content);
+    expect(native.onMessage).toHaveBeenCalledTimes(count);
+    expect(statuses).not.toContain('Browser is listening');
+  });
 
   it('detects speech boundaries, sends the final audio packet, and flushes Gemini at the end of a phrase', async () => {
     const { controller } = setup();

@@ -3,6 +3,15 @@ import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import App from './App';
 import type { TranscriptUpdate } from './speechInput';
+import type { DialogCallbacks } from './dialog';
+
+const dialogMock = vi.hoisted(() => ({ latest: null as null | { callbacks: DialogCallbacks; stopped: boolean } }));
+vi.mock('./dialog', () => ({ Dialog: class {
+  stopped = false;
+  constructor(_api: string, _token: unknown, public callbacks: DialogCallbacks) { dialogMock.latest = this; }
+  async start() { this.callbacks.onStatus('Dialog is listening'); }
+  stop() { this.stopped = true; }
+} }));
 
 const speechInputMock = vi.hoisted(() => ({ instances: [] as Array<{ callbacks: { onTranscript: (update: TranscriptUpdate) => void; onStatus: (status: string) => void; onSpeechStarted?: () => void; onSpeechEnded?: (elapsed?: number) => void }; stopped: boolean }> }));
 const speechOutputMock = vi.hoisted(() => ({ instances: [] as Array<{ phase: string; messageId: string | null; plays: Array<[string, string]>; toggles: Array<[string, string]>; streamed: string[]; stops: number }> }));
@@ -91,6 +100,59 @@ function chatPayload(fetchMock: ReturnType<typeof vi.fn>, index: number) {
   const request = fetchMock.mock.calls.filter(([url]) => String(url).endsWith('/api/chat'))[index];
   return JSON.parse(request[1]?.body as string) as { messages: Array<{ role: string; content: string }> };
 }
+
+describe('Dialog integration', () => {
+  beforeEach(() => { sessionStorage.setItem('chat-token', 'test-session-token'); mockApi(); });
+
+  it('keeps Live available, shows Dialog transcripts, applies shared tools and ends on another action', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    expect(screen.getByRole('button', { name: 'Start Live' })).toBeEnabled();
+    await user.click(screen.getByRole('button', { name: 'Start Dialog' }));
+    expect(screen.getByText('Dialog is listening')).toBeInTheDocument();
+    const controller = dialogMock.latest!;
+    act(() => controller.callbacks.onTurn({ userId: 'dialog-user', assistantId: 'dialog-answer', input: 'Hello Gemini', output: 'Hello there', status: 'complete' }));
+    expect(screen.getByText('Hello Gemini')).toBeInTheDocument();
+    expect(screen.getByText('Hello there')).toBeInTheDocument();
+    await act(async () => { await controller.callbacks.invokeTool('set_theme', { theme: 'dark' }, new AbortController().signal); });
+    expect(document.documentElement.dataset.theme).toBe('dark');
+    await user.click(screen.getByRole('button', { name: 'Play' }));
+    expect(controller.stopped).toBe(true);
+    expect(screen.getByRole('button', { name: 'Start Dialog' })).toBeInTheDocument();
+    expect(speechOutputMock.instances.at(-1)?.toggles.at(-1)).toEqual(['dialog-answer', 'Hello there']);
+  });
+
+  it('restores controls after provider failure and preserves the composer draft', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.type(screen.getByRole('textbox', { name: 'Message' }), 'Unsent draft');
+    await user.click(screen.getByRole('button', { name: 'Start Dialog' }));
+    act(() => dialogMock.latest!.callbacks.onError(new Error('Dialog quota exhausted')));
+    expect(screen.getByText('Dialog quota exhausted')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Start Dialog' })).toBeEnabled();
+    expect(screen.getByRole('textbox', { name: 'Message' })).toHaveValue('Unsent draft');
+    expect(dialogMock.latest!.stopped).toBe(true);
+  });
+
+  it('ends Dialog on keyboard submission and carries its visible partial answer into typed chat', async () => {
+    const fetchMock = mockApi();
+    fetchMock.mockResolvedValue(eventStream({ delta: 'Typed reply' }));
+    const user = userEvent.setup();
+    render(<App />);
+    await user.type(screen.getByRole('textbox', { name: 'Message' }), 'Follow up');
+    await user.click(screen.getByRole('button', { name: 'Start Dialog' }));
+    act(() => dialogMock.latest!.callbacks.onTurn({ userId: 'dialog-user', assistantId: 'dialog-answer', input: 'Spoken question', output: 'Visible partial', status: 'pending' }));
+    // Keyboard focus does not click the shell, so send itself must end Dialog.
+    fireEvent.keyDown(screen.getByRole('textbox', { name: 'Message' }), { key: 'Enter' });
+    expect(dialogMock.latest!.stopped).toBe(true);
+    await screen.findByText('Typed reply');
+    const payload = chatPayload(fetchMock, 0);
+    expect(payload.messages[0]).toMatchObject({ role: 'user', content: 'Spoken question' });
+    expect(payload.messages[1].content).toContain('Visible partial');
+    expect(payload.messages[1].content).toContain('[Interrupted.');
+    expect(payload.messages[2].content).toBe('Follow up');
+  });
+});
 
 describe('invitation loading feedback', () => {
   it.each(['Enter', 'Continue'])('shows loading immediately after %s and opens chat when the request completes', async submit => {

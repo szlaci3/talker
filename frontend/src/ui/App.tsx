@@ -4,6 +4,7 @@ import remarkGfm from 'remark-gfm';
 import { accessibleTextColor, COLOR_CSS_VARIABLES, COLOR_TARGETS, ColorPreferences, ColorTarget, contrastRatio, DEFAULT_COLORS, initialScale, initialTheme, parseColor, readSavedColors, Theme, UI_TOOL_DECLARATIONS, UiAction, validateUiAction } from './uiTools';
 import { SpeechOutput, SpeechSnapshot } from './speechOutput';
 import { SpeechInput, TranscriptCorrection } from './speechInput';
+import { Dialog } from './dialog';
 import { executeNativeUiTool, WebMCPContext, WebMCPTool } from './webmcp';
 
 type Message = {
@@ -85,6 +86,9 @@ export default function App() {
   const [dictationStatus, setDictationStatus] = useState('');
   const [dictationActive, setDictationActive] = useState(false);
   const [liveActive, setLiveActive] = useState(false);
+  const [dialogActive, setDialogActive] = useState(false);
+  const [dialogStatus, setDialogStatus] = useState('');
+  const dialog = useRef<Dialog | null>(null);
   const [liveCountdown, setLiveCountdown] = useState<number | null>(null);
   const [correction, setCorrection] = useState<TranscriptCorrection | null>(null);
   const [busy, setBusy] = useState(false);
@@ -120,6 +124,7 @@ export default function App() {
   useEffect(() => {
     if (token) void speechOutput.current?.warmup();
     else {
+      stopDialog();
       speechOutput.current?.stop();
       speechInput.current?.stop();
       speechInput.current = null;
@@ -132,6 +137,8 @@ export default function App() {
   }, [token]);
   useEffect(() => () => speechOutput.current?.dispose(), []);
   useEffect(() => () => {
+    dialog.current?.stop();
+    dialog.current = null;
     speechInput.current?.stop();
     window.clearTimeout(correctionTimer.current);
     if (liveSilenceTimer.current !== null) window.clearInterval(liveSilenceTimer.current);
@@ -240,6 +247,7 @@ export default function App() {
   }, [theme, scale]);
 
   const invokeUiTool = useCallback(async (name: unknown, rawInput: unknown, signal: AbortSignal) => {
+    if (signal.aborted) return { ok: false, message: 'The UI action was canceled.' };
     const input = toolArguments(rawInput);
     const action = validateUiAction(name, input);
     if (!action || typeof name !== 'string') return { ok: false, message: 'That UI action was invalid and was not applied.' };
@@ -263,8 +271,11 @@ export default function App() {
         }
       }
     }
+    if (signal.aborted) return { ok: false, message: 'The UI action was canceled.' };
     return applyUiAction(action);
   }, [applyUiAction]);
+  const dialogTool = useRef(invokeUiTool);
+  dialogTool.current = invokeUiTool;
 
   useEffect(() => {
     const doc = document as Document & { modelContext?: WebMCPContext };
@@ -345,6 +356,7 @@ export default function App() {
     e?.preventDefault();
     const body = text.trim();
     if (!body || abort.current || !token) return;
+    stopDialog();
 
     const keepLiveOpen = liveActiveRef.current;
     if (keepLiveOpen) {
@@ -379,7 +391,7 @@ export default function App() {
           'X-Conversation-ID': conversationId.current,
         },
         body: JSON.stringify({
-          messages: [...completedTurns(messages), { role: 'user', content: body }]
+          messages: [...completedTurns(messages.map(m => m.status === 'pending' ? { ...m, status: 'interrupted' } : m)), { role: 'user', content: body }]
             .map(({ role, content }) => ({ role, content })),
         }),
         signal: ctl.signal,
@@ -539,10 +551,12 @@ export default function App() {
   }
 
   function startDictation() {
+    stopDialog();
     startSpeechInput('dictation');
   }
 
   function startLive() {
+    stopDialog();
     if (liveActiveRef.current) {
       stopLive();
       return;
@@ -575,9 +589,53 @@ export default function App() {
     if (phase && !['idle', 'ended', 'error'].includes(phase)) speechOutput.current?.stop();
   }
 
+  function stopDialog() {
+    const controller = dialog.current;
+    dialog.current = null;
+    controller?.stop();
+    setDialogActive(false);
+    setDialogStatus('');
+  }
+
+  function startDialog() {
+    if (dialog.current) { stopDialog(); return; }
+    stopLive();
+    stopDictation();
+    interruptResponse();
+    setError('');
+    setDialogActive(true);
+    setDialogStatus('Connecting to Dialog…');
+    const controller = new Dialog(API, () => sessionStorage.getItem('chat-token') || '', {
+      onStatus: status => { if (dialog.current === controller) setDialogStatus(status); },
+      onError: cause => {
+        if (dialog.current !== controller) return;
+        stopDialog();
+        setError(cause.message);
+      },
+      invokeTool: (name, args, signal) => dialogTool.current(name, args, signal),
+      onTurn: turn => {
+        setMessages(current => {
+          const updated = [...current];
+          for (const message of [
+            { id: turn.userId, role: 'user' as const, content: turn.input, status: turn.status === 'pending' ? undefined : turn.status },
+            { id: turn.assistantId, role: 'assistant' as const, content: turn.output, status: turn.status },
+          ]) {
+            if (!message.content && message.status !== 'pending') continue;
+            const index = updated.findIndex(m => m.id === message.id);
+            if (index === -1) updated.push(message);
+            else updated[index] = message;
+          }
+          return updated.filter(m => !((m.id === turn.assistantId || m.id === turn.userId) && !m.content && turn.status !== 'pending'));
+        });
+      },
+    }, completedTurns(messages.map(m => m.status === 'pending' ? { ...m, status: 'interrupted' } : m)));
+    dialog.current = controller;
+    void controller.start();
+  }
+
   const answerSpeaking = speech.phase === 'loading' || speech.phase === 'speaking-edge' || speech.phase === 'speaking-browser' || speech.phase === 'paused';
   const micLabel = dictationActive && !liveActive ? 'Mute' : 'Mic';
-  const listenerStatus = liveCountdown === null ? dictationStatus : `Sending in ${liveCountdown}…`;
+  const listenerStatus = dialogActive ? dialogStatus : liveCountdown === null ? dictationStatus : `Sending in ${liveCountdown}…`;
 
   if (!token) {
     return <main className="gate">
@@ -594,6 +652,7 @@ export default function App() {
   }
 
   return <main className="shell" onClickCapture={event => {
+    if (dialog.current && !(event.target instanceof Element && event.target.closest('.composer .dialog'))) stopDialog();
     if (!liveActiveRef.current) return;
     const target = event.target;
     if (target instanceof Element && target.closest('.composer .live, .composer .send-now, .composer .interrupt')) return;
@@ -688,6 +747,9 @@ export default function App() {
         </button>
         <button type="button" className={'live' + (liveActive ? ' active' : '')} onClick={startLive} disabled={!token || (!liveActive && (dictationActive || busy || answerSpeaking))} aria-label={liveActive ? 'End Live' : 'Start Live'} title={liveActive ? 'End live voice conversation' : 'Start live voice conversation'}>
           {liveActive ? 'End Live' : 'Live'}
+        </button>
+        <button type="button" className={'dialog' + (dialogActive ? ' active' : '')} onClick={startDialog} disabled={!token} aria-label={dialogActive ? 'End Dialog' : 'Start Dialog'} title={dialogActive ? 'End Gemini voice dialog' : 'Talk directly with Gemini using its native voice'}>
+          {dialogActive ? 'End Dialog' : 'Dialog'}
         </button>
         {(busy || answerSpeaking) && <button type="button" className="interrupt" onClick={interruptResponse}>Interrupt</button>}
         <button type="submit" aria-label={liveActive && input.trim() ? 'Send now' : '↑'} className={liveActive && input.trim() ? 'send-now' : ''} disabled={!input.trim() || busy}>{liveActive && input.trim() ? 'Send now' : '↑'}</button>
