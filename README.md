@@ -49,6 +49,6 @@ The current entry-attempt, chat caps, speech cache, and speech request caps live
 
 ## Talker family
 
-This repository remains the independently deployed Talker application. Vanilla Talker is a separate local, full-history foundation; its releases are adopted deliberately, with no automatic synchronization or deployment.
+Talker remains an independently deployed descendant. Vanilla Talker is a separate, locally runnable foundation with full shared Git history and its own private GitHub repository for version control and backup. It has no separate application deployment. Descendants deliberately adopt complete tagged Vanilla releases through reviewed merges; publishing a Vanilla release does not automatically update or deploy them.
 
 Read [the family architecture](docs/talker-architecture.md) and [the synchronization workflow](docs/sync-workflow.md) for repository roles, whole-release adoption, and selective feature promotion. Current verification is recorded in [implementation status](docs/implementation-status.md); older setup and milestone statements above are retained as project history.
