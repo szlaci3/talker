@@ -104,7 +104,7 @@ This document describes the **agreed target architecture**, not a claim that rep
 
 ## 9. Deferred decisions (not blockers for the initial plan)
 
-- Whether Vanilla eventually has a **private hosted Git remote for backup**. It has no application deployment now.
+- Private Git backup approved 2026-10-11: Vanilla uses its own `origin` at `https://github.com/szlaci3/vanilla-talker.git`. The owner authorized connecting it and pushing Vanilla main plus the immutable `vanilla/v1.0.0` tag. Application execution remains local; no deployment is authorized. Future Vanilla pushes still require authorization. Talker keeps its existing origin and local vanilla fetch remote.
 - Specific extension points, determined from inspection of the real Talker codebase.
 - Whether common libraries/packages are eventually extracted, based on demonstrated repetition.
 - Exact CI commands and compatibility tests, determined by examining the repository.

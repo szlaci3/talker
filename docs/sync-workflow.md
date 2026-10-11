@@ -153,3 +153,17 @@ After successful setup, fast-forward only the reviewed Talker documentation bran
 ## 10. Recovery for the initial local setup
 
 If validation fails, leave work on its named local branches and do not release/tag it. Abort an active rehearsal merge in the disposable clone. Do not reset main or delete user files. Once documentation is integrated into main, use a reviewed revert commit if needed; do not rewrite history. Removing the newly introduced fetch remote, disposable clone, or Vanilla directory requires deliberate authorization and path verification. Never move an existing release tag; fixes after release use a new version. No rollback of hosted state is needed because setup makes no push or deployment.
+
+## 11. Private backup remote: approved 2026-10-11
+
+After the local setup, the owner provided the empty private repository `https://github.com/szlaci3/vanilla-talker.git` and authorized connecting Vanilla origin and pushing its main branch plus the existing annotated `vanilla/v1.0.0` tag. This supplements the initial local-only setup authorization above; it does not authorize a Talker push, release adoption, application deployment, or automatic future Vanilla pushes.
+
+Inspect the destination visibility and refs, verify the working tree and tracked history for accidental credentials, and preserve the release tag object. Add origin only if absent; do not overwrite another remote. Review the documentation-only commit recording this decision, then use explicit non-forcing refspecs:
+
+```powershell
+# In Vanilla only; after confirming the inspected destination and clean state.
+git push --dry-run --atomic origin refs/heads/main:refs/heads/main refs/tags/vanilla/v1.0.0:refs/tags/vanilla/v1.0.0
+git push --atomic --set-upstream origin refs/heads/main:refs/heads/main refs/tags/vanilla/v1.0.0:refs/tags/vanilla/v1.0.0
+```
+
+Verify remote main matches the local commit and both annotated tag object and peeled release commit match. Set Vanilla main to track its own origin/main; Talker's main continues tracking its own origin/main and its vanilla remote remains the local fetch source with accidental pushes disabled. Commit synchronized family-document changes in Talker locally without pushing them under this authorization. Do not move the existing release tag to include later backup documentation. A private Git remote backs up tracked history and tags; ignored local configuration and dependencies remain local.
