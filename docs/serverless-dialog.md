@@ -48,7 +48,7 @@ Token routes authenticate before calling Google, ignore client configuration ove
 Netlify Free supports two rules; this change uses exactly two:
 
 - Invitation route: 8 requests per IP/domain per 180 seconds, plus the original 8-per-600-second instance-local guardrail. Trusted IP comes from Netlify context, not a caller forwarding header. Request parsing is bounded to 2 KiB and requires a JSON object/string code. Wrong codes use constant-time comparison.
-- Dialog/Dictation token routes and session checks share 30 requests per IP/domain per 180 seconds. There is no three-request-per-minute transcription cap.
+- Dialog/Dictation token routes and session checks (plus the subsequently added Antigravity public routes) share 30 requests per IP/domain per 180 seconds. There is no three-request-per-minute transcription cap.
 
 Platform counters cover separate function instances, but Netlify documents up to ten seconds of enforcement lag. These are abuse controls, **not strict durable global quotas**. The original 600-second invitation counter still resets per instance; Render chat/daily/speech counters remain process-local. Google enforces its project quotas; keep its billing disabled. No existing durable quota was removed.
 
@@ -72,9 +72,9 @@ Rollback: set `VITE_ACCESS_API_URL` to the existing Render URL and rebuild Netli
 
 ## Family scope and official references
 
-### Remaining backend inventory (analysis only, 2026-10-17)
+### Backend inventory before Antigravity implementation (2026-10-17)
 
-Netlify Functions are themselves a backend. IWD means the individual feature loses its Render wakeup dependency through the migration described below; it does not promise zero provider/function latency. No further migration is authorized or implemented by this inventory.
+Netlify Functions are themselves a backend. IWD means the individual feature loses its Render wakeup dependency through the migration described below; it does not promise zero provider/function latency. This is the earlier analysis snapshot. The user subsequently authorized Antigravity migration; its implementation, explicit activation and remaining hosted checks are now recorded in [serverless-antigravity.md](serverless-antigravity.md). Brian remains on Render.
 
 | Feature/service | Current server-side work | Further Netlify migration | IWD |
 | --- | --- | --- | --- |

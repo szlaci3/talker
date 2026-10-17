@@ -335,6 +335,8 @@ async def write_event(response, value):
 
 async def chat_route(request):
     session_key, conversation_id = request_identity(request)
+    if os.getenv("CHAT_ENABLED", "true").lower() != "true":
+        raise web.HTTPServiceUnavailable(text='{"error":"Chat has moved to the frontend host. Please refresh Talker."}', content_type="application/json")
     data = await read_json(request)
     messages = get_messages(data)
     count_model_request(session_key)
@@ -378,6 +380,8 @@ async def chat_route(request):
 
 async def ui_tool_result_route(request):
     session_key, conversation_id = request_identity(request)
+    if os.getenv("CHAT_ENABLED", "true").lower() != "true":
+        raise web.HTTPServiceUnavailable(text='{"error":"Chat has moved to the frontend host. Please refresh Talker."}', content_type="application/json")
     data = await read_json(request)
     results = data.get("toolResults")
     if not isinstance(results, list) or not 1 <= len(results) <= MAX_UI_TOOL_CALLS:

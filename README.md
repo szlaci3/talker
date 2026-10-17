@@ -13,11 +13,15 @@ For a deployed backend, configure these values in the hosting provider environme
 
 Set `VITE_API_URL` before building the frontend when the API is hosted somewhere other than `http://localhost:8080`. Configure the API's `ALLOWED_ORIGINS` to the exact frontend origin(s). Local Vite development uses Python for all routes. Production can use same-origin Netlify Functions for invitation/session checks and Gemini tokens; follow [serverless Dialog setup](docs/serverless-dialog.md) to configure their server-side environment before deploying. After configuring secrets, set `VITE_ACCESS_API_URL=same-origin` at Netlify build time to activate the migration. An unset value retains existing Python access routes for safe rollout; a URL overrides access routing for staged/local tests.
 
+Antigravity can also run through Netlify. After deploying its worker and checking [Antigravity migration setup](docs/serverless-antigravity.md), set `VITE_CHAT_API_URL=same-origin` and redeploy. Leave `VITE_API_URL` pointing to Render for Brian; after verification, set `CHAT_ENABLED=false` on Render to retire its old chat routes.
+
 ## Tests
 
 Run `npm test` in `frontend/` for deterministic Vitest/React Testing Library UI tests. These tests use controlled response streams and make no model API calls. Run `npm run test:functions` there for Netlify security tests (Node 22+ and Python stdlib required), and `python -m unittest -v test_speech` in `backend/` for mocked Python route tests (also requires Node for session compatibility).
 
-For one real Antigravity smoke test, start the local backend with `CHAT_PROVIDER=antigravity` and a valid `GOOGLE_API_KEY` in `backend/.env`, then run `npm run test:live` in `frontend/` with these environment variables set in the same shell:
+For the new Netlify-handler path, run `npm run test:live:netlify` with `TALKER_ENABLE_ANTIGRAVITY_LIVE=1`. Its local adapter loads backend credentials only in the server process, runs the same UI smoke test over localhost, and enforces the shared 7/minute provider-request budget. It does not test hosted Netlify storage/background execution.
+
+For one real Antigravity smoke test of the Python path, start the local backend with `CHAT_PROVIDER=antigravity` and a valid `GOOGLE_API_KEY` in `backend/.env`, then run `npm run test:live` in `frontend/` with these environment variables set in the same shell:
 
 - `TALKER_ENABLE_ANTIGRAVITY_LIVE=1`
 - `TALKER_LIVE_INVITATION_CODE` set to the local invitation code

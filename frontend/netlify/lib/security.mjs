@@ -71,7 +71,7 @@ export function invitationAttempt(ip) {
   attempts.set(ip, entries);
 }
 
-export async function smallJson(request) {
+export async function smallJson(request, maximum = 2048) {
   if (!request.headers.get('Content-Type')?.toLowerCase().startsWith('application/json')) {
     throw json({ error: 'Expected JSON.' }, 400);
   }
@@ -84,7 +84,7 @@ export async function smallJson(request) {
       const { value, done } = await reader.read();
       if (done) break;
       size += value.byteLength;
-      if (size > 2048) {
+      if (size > maximum) {
         await reader.cancel();
         throw json({ error: 'Request is too large.' }, 413);
       }

@@ -39,7 +39,7 @@ it('gets a real Antigravity answer and applies a conversational UI color change'
   vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url);
     requestPaths.push(url.pathname);
-    if (url.pathname === '/api/chat' || url.pathname === '/api/ui-tool-result') await waitForAntigravityRequestSlot();
+    if (env.TALKER_ANTIGRAVITY_BUDGET_AT_SERVER !== '1' && (url.pathname === '/api/chat' || url.pathname === '/api/ui-tool-result')) await waitForAntigravityRequestSlot();
     return nativeFetch(input, init);
   });
 

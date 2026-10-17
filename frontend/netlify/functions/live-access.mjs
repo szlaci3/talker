@@ -1,10 +1,12 @@
 import { authenticated, failure, json, method, sameOrigin, secret } from '../lib/security.mjs';
 import { liveTokenPayload } from '../lib/live.mjs';
+import { CHAT_PATHS, antigravityRoute } from '../lib/antigravity.mjs';
 
 export default async function liveAccess(request) {
   try {
     sameOrigin(request);
     const path = new URL(request.url).pathname;
+    if (CHAT_PATHS.includes(path)) return await antigravityRoute(request);
     const check = path === '/api/session/check';
     if (!check && !['/api/dialog-token', '/api/live-token'].includes(path)) return json({ error: 'Not found.' }, 404);
     method(request, check ? 'GET' : 'POST');
@@ -38,6 +40,6 @@ export default async function liveAccess(request) {
 
 // Two project rules total, fitting Netlify's Free plan. No three-per-minute cap.
 export const config = {
-  path: ['/api/dialog-token', '/api/live-token', '/api/session/check'],
+  path: ['/api/dialog-token', '/api/live-token', '/api/session/check', '/api/chat', '/api/ui-tool-result', '/api/chat-stream', '/api/chat-cancel'],
   rateLimit: { windowLimit: 30, windowSize: 180, aggregateBy: ['ip', 'domain'] },
 };

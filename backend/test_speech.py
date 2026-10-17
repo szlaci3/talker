@@ -66,7 +66,7 @@ async def fake_list_voices():
 
 class SpeechRoutesTest(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
-        self.env = patch.dict(os.environ, {"SESSION_SECRET": "test-secret-value-with-at-least-32-bytes", "ALLOWED_ORIGINS": "http://localhost:5173"})
+        self.env = patch.dict(os.environ, {"SESSION_SECRET": "test-secret-value-with-at-least-32-bytes", "ALLOWED_ORIGINS": "http://localhost:5173", "CHAT_ENABLED": "true"})
         self.env.start()
         FakeTokenClient.calls.clear()
         FakeTokenResponse.status = 200
@@ -90,6 +90,17 @@ class SpeechRoutesTest(unittest.IsolatedAsyncioTestCase):
 
     def headers(self):
         return {"Authorization": "Bearer " + self.token}
+
+    async def test_retired_render_chat_routes_stay_authenticated_and_do_not_call_google(self):
+        with patch.dict(os.environ, {"CHAT_ENABLED": "false"}), patch.object(server, "ClientSession", FakeTokenClient):
+            for path in ["/api/chat", "/api/ui-tool-result"]:
+                denied = await self.client.post(path, json={})
+                self.assertEqual(denied.status, 401)
+                retired = await self.client.post(path, json={}, headers={
+                    **self.headers(), "X-Conversation-ID": "11111111-1111-4111-8111-111111111111",
+                })
+                self.assertEqual(retired.status, 503)
+        self.assertEqual(FakeTokenClient.calls, [])
 
     async def test_netlify_session_is_accepted_by_render_and_protected_routes_stay_closed(self):
         module = (Path(__file__).resolve().parent.parent / "frontend/netlify/lib/security.mjs").as_uri()

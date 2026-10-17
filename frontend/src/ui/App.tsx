@@ -19,6 +19,8 @@ const API = import.meta.env.VITE_API_URL || 'http://localhost:8080';
 const ACCESS_API = import.meta.env.VITE_ACCESS_API_URL === 'same-origin'
   ? '' : (import.meta.env.VITE_ACCESS_API_URL ?? API);
 const SESSION_CHECK_PATH = import.meta.env.VITE_ACCESS_API_URL === undefined ? '/api/session' : '/api/session/check';
+const SERVERLESS_CHAT = Boolean(import.meta.env.VITE_CHAT_API_URL);
+const CHAT_API = import.meta.env.VITE_CHAT_API_URL === 'same-origin' ? '' : (import.meta.env.VITE_CHAT_API_URL || API);
 const LIVE_SILENCE_MS = 4000;
 const suggestions = ['What can you help me with?', 'Explain a tricky idea simply', 'Help me plan a small project'];
 const WEBMCP_FALLBACK = 'Standard chat (no WebMCP)';
@@ -387,9 +389,17 @@ export default function App() {
 
     const ctl = new AbortController();
     abort.current = ctl;
+    let currentJobId = crypto.randomUUID();
+    const chatHeaders = { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token, 'X-Conversation-ID': conversationId.current };
+    const cancelRemote = () => {
+      if (SERVERLESS_CHAT) void fetch(CHAT_API + '/api/chat-cancel', {
+        method: 'POST', headers: chatHeaders, body: JSON.stringify({ requestId: currentJobId }), keepalive: true,
+      }).catch(() => {});
+    };
+    ctl.signal.addEventListener('abort', cancelRemote, { once: true });
     let streamedAnswer = '';
     try {
-      const r = await fetch(API + '/api/chat', {
+      const r = await fetch(CHAT_API + '/api/chat', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -397,6 +407,7 @@ export default function App() {
           'X-Conversation-ID': conversationId.current,
         },
         body: JSON.stringify({
+          requestId: currentJobId,
           messages: [...completedTurns(messages.map(m => m.status === 'pending' ? { ...m, status: 'interrupted' } : m)), { role: 'user', content: body }]
             .map(({ role, content }) => ({ role, content })),
         }),
@@ -411,7 +422,7 @@ export default function App() {
           }
         throw Error(j.error || 'Request failed (' + r.status + ').');
       }
-      const readEvents = async (response: Response, depth = 0): Promise<void> => {
+      const readEvents = async (response: Response, depth = 0): Promise<{ resume: boolean; offset: number }> => {
         if (!response.ok) {
           const j = await response.json().catch(() => ({}));
           throw Error(j.error || 'Request failed (' + response.status + ').');
@@ -420,10 +431,30 @@ export default function App() {
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
         let buffer = '';
+        let resume = false;
+        let offset = 0;
         const handle = async (data: string) => {
+          if (ctl.signal.aborted) throw new DOMException('Request canceled.', 'AbortError');
           if (data === '[DONE]') return;
           const event = JSON.parse(data);
           if (event.error) throw Error(event.error);
+          if (event.resume === true) {
+            if (!Number.isInteger(event.offset) || event.offset < 0 || event.offset > 24000) throw Error('Invalid chat stream position.');
+            resume = true; offset = event.offset;
+          }
+          if (typeof event.job === 'string') {
+            if (!SERVERLESS_CHAT || event.job !== currentJobId) throw Error('Invalid chat request.');
+            const jobId = event.job;
+            let next = { resume: true, offset: 0 };
+            while (next.resume) {
+              if (ctl.signal.aborted) throw new DOMException('Request canceled.', 'AbortError');
+              const chunk = await fetch(CHAT_API + '/api/chat-stream', {
+                method: 'POST', headers: chatHeaders,
+                body: JSON.stringify({ requestId: jobId, offset: next.offset }), signal: ctl.signal,
+              });
+              next = await readEvents(chunk, depth);
+            }
+          }
           if (typeof event.delta === 'string') {
             streamedAnswer += event.delta;
             setMessages(cur => cur.map(m => m.id === assistantId ? { ...m, content: m.content + event.delta } : m));
@@ -440,10 +471,12 @@ export default function App() {
               };
               return { callId: call.id, result };
             }));
-            const continuation = await fetch(API + '/api/ui-tool-result', {
+            const parentRequestId = currentJobId;
+            currentJobId = crypto.randomUUID();
+            const continuation = await fetch(CHAT_API + '/api/ui-tool-result', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token, 'X-Conversation-ID': conversationId.current },
-              body: JSON.stringify({ toolResults }), signal: ctl.signal,
+              body: JSON.stringify({ toolResults, requestId: currentJobId, parentRequestId }), signal: ctl.signal,
             });
             await readEvents(continuation, depth + 1);
           }
@@ -457,15 +490,17 @@ export default function App() {
           for (const line of lines) if (line.startsWith('data:')) await handle(line.slice(5).trim());
         }
         if (buffer.startsWith('data:')) await handle(buffer.slice(5).trim());
+        return { resume, offset };
       };
       await readEvents(r);
       setMessages(cur => cur.map(m => m.id === assistantId ? { ...m, status: 'complete' } : m));
       if (keepLiveOpen && streamedAnswer.trim()) speechOutput.current?.finishStreaming(assistantId, streamedAnswer);
     } catch (x) {
       const canceled = (x as Error).name === 'AbortError';
+      if (!canceled) cancelRemote();
       if (speechOutput.current?.snapshot().messageId === assistantId) speechOutput.current.stop();
-      if (canceled) conversationId.current = crypto.randomUUID();
-      else setError((x as Error).message);
+      if (canceled || SERVERLESS_CHAT) conversationId.current = crypto.randomUUID();
+      if (!canceled) setError((x as Error).message);
       setMessages(cur => {
         return cur.flatMap(m => {
           if ((x as Error).message === 'Your session expired. Enter the code again.' && (m.id === userId || m.id === assistantId)) return [];
@@ -478,6 +513,7 @@ export default function App() {
         });
       });
     } finally {
+      ctl.signal.removeEventListener('abort', cancelRemote);
       if (abort.current === ctl) {
         abort.current = null;
         setBusy(false);
