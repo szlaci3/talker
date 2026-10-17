@@ -124,11 +124,10 @@ describe('speech output lifecycle', () => {
 describe('Dialog integration', () => {
   beforeEach(() => { sessionStorage.setItem('chat-token', 'test-session-token'); mockApi(); });
 
-  it('hides Live, shows Dialog transcripts, applies shared tools and ends on another action', async () => {
+  it('shows Live alongside Dialog, applies shared tools and ends on another action', async () => {
     const user = userEvent.setup();
     render(<App />);
-    expect(screen.queryByRole('button', { name: 'Start Live' })).not.toBeInTheDocument();
-    expect(screen.getByLabelText('Start Live')).not.toBeVisible();
+    expect(screen.getByRole('button', { name: 'Start Live' })).toBeVisible();
     await user.click(screen.getByRole('button', { name: 'Start Dialog' }));
     expect(screen.getByText('Dialog is listening')).toBeInTheDocument();
     const controller = dialogMock.latest!;
