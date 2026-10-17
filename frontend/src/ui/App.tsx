@@ -117,13 +117,17 @@ export default function App() {
   const sessionCheck = useRef<Promise<void> | null>(null);
   const tail = useRef<HTMLDivElement>(null);
 
-  if (!speechOutput.current) {
-    speechOutput.current = new SpeechOutput(API, () => sessionStorage.getItem('chat-token') || '', setSpeech);
-  }
-
   useEffect(() => {
-    if (token) void speechOutput.current?.warmup();
-    else {
+    const output = new SpeechOutput(API, () => sessionStorage.getItem('chat-token') || '', setSpeech);
+    speechOutput.current = output;
+    if (token) void output.warmup();
+    return () => {
+      output.dispose();
+      if (speechOutput.current === output) speechOutput.current = null;
+    };
+  }, [token]);
+  useEffect(() => {
+    if (!token) {
       stopDialog();
       speechOutput.current?.stop();
       speechInput.current?.stop();
@@ -135,7 +139,6 @@ export default function App() {
       setDictationStatus('');
     }
   }, [token]);
-  useEffect(() => () => speechOutput.current?.dispose(), []);
   useEffect(() => () => {
     dialog.current?.stop();
     dialog.current = null;

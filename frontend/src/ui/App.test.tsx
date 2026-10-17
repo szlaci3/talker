@@ -1,4 +1,5 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { StrictMode } from 'react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import App from './App';
@@ -14,7 +15,7 @@ vi.mock('./dialog', () => ({ Dialog: class {
 } }));
 
 const speechInputMock = vi.hoisted(() => ({ instances: [] as Array<{ callbacks: { onTranscript: (update: TranscriptUpdate) => void; onStatus: (status: string) => void; onSpeechStarted?: () => void; onSpeechEnded?: (elapsed?: number) => void }; stopped: boolean }> }));
-const speechOutputMock = vi.hoisted(() => ({ instances: [] as Array<{ phase: string; messageId: string | null; plays: Array<[string, string]>; toggles: Array<[string, string]>; streamed: string[]; stops: number }> }));
+const speechOutputMock = vi.hoisted(() => ({ instances: [] as Array<{ phase: string; messageId: string | null; plays: Array<[string, string]>; toggles: Array<[string, string]>; streamed: string[]; stops: number; warmups: number; disposed: boolean }> }));
 vi.mock('./speechInput', () => ({ SpeechInput: class {
   readonly callbacks: typeof speechInputMock.instances[number]['callbacks'];
   stopped = false;
@@ -33,11 +34,13 @@ vi.mock('./speechOutput', () => ({ SpeechOutput: class {
   toggles: Array<[string, string]> = [];
   streamed: string[] = [];
   stops = 0;
+  warmups = 0;
+  disposed = false;
   constructor(_api: string, _getToken: () => string, private onSnapshot: (value: { messageId: string | null; phase: string; service: string; detail: string }) => void) {
     speechOutputMock.instances.push(this);
   }
   snapshot() { return { messageId: this.messageId, phase: this.phase, service: 'idle', detail: '' }; }
-  async warmup() {}
+  async warmup() { this.warmups++; }
   unlock() {}
   play(messageId: string, text: string) { this.messageId = messageId; this.phase = 'speaking-browser'; this.plays.push([messageId, text]); this.onSnapshot(this.snapshot()); }
   startStreaming(messageId: string) { this.messageId = messageId; this.phase = 'loading'; this.streamed.push('start'); this.onSnapshot(this.snapshot()); }
@@ -51,7 +54,7 @@ vi.mock('./speechOutput', () => ({ SpeechOutput: class {
     this.onSnapshot(this.snapshot());
   }
   stop() { this.stops++; this.phase = 'idle'; this.onSnapshot(this.snapshot()); }
-  dispose() { this.stop(); }
+  dispose() { this.disposed = true; this.stop(); }
 } }));
 
 function eventStream(...events: Array<Record<string, unknown>>) {
@@ -100,6 +103,23 @@ function chatPayload(fetchMock: ReturnType<typeof vi.fn>, index: number) {
   const request = fetchMock.mock.calls.filter(([url]) => String(url).endsWith('/api/chat'))[index];
   return JSON.parse(request[1]?.body as string) as { messages: Array<{ role: string; content: string }> };
 }
+
+describe('speech output lifecycle', () => {
+  beforeEach(() => {
+    sessionStorage.setItem('chat-token', 'test-session-token');
+    speechOutputMock.instances = [];
+    mockApi();
+  });
+
+  it('recreates and warms the speech client after React Strict Mode cleanup', async () => {
+    render(<StrictMode><App /></StrictMode>);
+
+    await waitFor(() => expect(speechOutputMock.instances).toHaveLength(2));
+    expect(speechOutputMock.instances[0].disposed).toBe(true);
+    expect(speechOutputMock.instances[1].disposed).toBe(false);
+    expect(speechOutputMock.instances[1].warmups).toBe(1);
+  });
+});
 
 describe('Dialog integration', () => {
   beforeEach(() => { sessionStorage.setItem('chat-token', 'test-session-token'); mockApi(); });
