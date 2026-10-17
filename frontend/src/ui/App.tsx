@@ -15,6 +15,10 @@ type Message = {
 };
 
 const API = import.meta.env.VITE_API_URL || 'http://localhost:8080';
+// Activate only after Netlify secrets are configured; preserve existing deployments.
+const ACCESS_API = import.meta.env.VITE_ACCESS_API_URL === 'same-origin'
+  ? '' : (import.meta.env.VITE_ACCESS_API_URL ?? API);
+const SESSION_CHECK_PATH = import.meta.env.VITE_ACCESS_API_URL === undefined ? '/api/session' : '/api/session/check';
 const LIVE_SILENCE_MS = 4000;
 const suggestions = ['What can you help me with?', 'Explain a tricky idea simply', 'Help me plan a small project'];
 const WEBMCP_FALLBACK = 'Standard chat (no WebMCP)';
@@ -120,7 +124,6 @@ export default function App() {
   useEffect(() => {
     const output = new SpeechOutput(API, () => sessionStorage.getItem('chat-token') || '', setSpeech);
     speechOutput.current = output;
-    if (token) void output.warmup();
     return () => {
       output.dispose();
       if (speechOutput.current === output) speechOutput.current = null;
@@ -317,7 +320,7 @@ export default function App() {
     setGatePending(true);
     setError('');
     try {
-      const r = await fetch(API + '/api/session', {
+      const r = await fetch(ACCESS_API + '/api/session', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ code: gate }),
@@ -339,7 +342,7 @@ export default function App() {
     const checkedToken = token;
     const check = (async () => {
       try {
-        const r = await fetch(API + '/api/session', {
+        const r = await fetch(ACCESS_API + SESSION_CHECK_PATH, {
           headers: { 'Authorization': 'Bearer ' + checkedToken },
         });
         if (r.status === 401 && sessionStorage.getItem('chat-token') === checkedToken) {
@@ -523,7 +526,7 @@ export default function App() {
     setCorrection(null);
     dictationBase.current = input;
     setError('');
-    const inputController = new SpeechInput(API, () => sessionStorage.getItem('chat-token') || '', {
+    const inputController = new SpeechInput(ACCESS_API, () => sessionStorage.getItem('chat-token') || '', {
       onStatus: status => { if (speechInput.current === inputController) setDictationStatus(status); },
       onSpeechStarted: () => {
         if (mode !== 'live' || !liveActiveRef.current) return;
@@ -608,7 +611,7 @@ export default function App() {
     setError('');
     setDialogActive(true);
     setDialogStatus('Connecting to Dialog…');
-    const controller = new Dialog(API, () => sessionStorage.getItem('chat-token') || '', {
+    const controller = new Dialog(ACCESS_API, () => sessionStorage.getItem('chat-token') || '', {
       onStatus: status => { if (dialog.current === controller) setDialogStatus(status); },
       onError: cause => {
         if (dialog.current !== controller) return;
@@ -727,7 +730,7 @@ export default function App() {
             : speech.service === 'connecting' ? 'Brian voice is connecting.'
               : speech.service === 'unavailable'
                 ? <><span title={speech.detail}>Brian voice unavailable.</span> <button type="button" onClick={() => void speechOutput.current?.reconnect()}>Reconnect</button></>
-                : 'Checking Brian voice…'}
+                : 'Brian connects on playback.'}
         </div>
         <div className={'status-item dictation-status' + (listenerStatus ? ' is-active' : '')} role="status">{listenerStatus}</div>
         <div className="status-item webmcp-status" role="status" aria-label={webmcp}>

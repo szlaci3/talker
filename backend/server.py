@@ -675,6 +675,7 @@ def create_app():
     app.router.add_get("/healthz", health)
     app.router.add_post("/api/session", session_route)
     app.router.add_get("/api/session", session_check_route)
+    app.router.add_get("/api/session/check", session_check_route)
     app.router.add_post("/api/live-token", live_token_route)
     app.router.add_post("/api/dialog-token", live_token_route)
     app.router.add_post("/api/chat", chat_route)

@@ -1,10 +1,13 @@
 import asyncio
 import os
+import json
+import subprocess
 import sys
 import time
 import types
 import unittest
 from datetime import datetime, timezone
+from pathlib import Path
 from unittest.mock import patch
 
 from aiohttp.test_utils import TestClient, TestServer
@@ -87,6 +90,34 @@ class SpeechRoutesTest(unittest.IsolatedAsyncioTestCase):
 
     def headers(self):
         return {"Authorization": "Bearer " + self.token}
+
+    async def test_netlify_session_is_accepted_by_render_and_protected_routes_stay_closed(self):
+        module = (Path(__file__).resolve().parent.parent / "frontend/netlify/lib/security.mjs").as_uri()
+        result = subprocess.run([
+            "node", "--input-type=module", "-e",
+            "import {tokenFor} from " + json.dumps(module) + "; console.log(tokenFor(Math.floor(Date.now()/1000)+600));",
+        ], env={**os.environ, "SESSION_SECRET": "test-secret-value-with-at-least-32-bytes"},
+            capture_output=True, text=True, check=True)
+        self.token = result.stdout.strip()
+        response = await self.client.get("/api/session/check", headers=self.headers())
+        self.assertEqual(response.status, 200)
+        response = await self.client.get("/api/voices", headers=self.headers())
+        self.assertEqual(response.status, 200)
+        response = await self.client.post("/api/speech", headers=self.headers(), json={
+            "text": "A short test.", "voice": server.PREFERRED_EDGE_VOICE, "rate": 1,
+        })
+        self.assertEqual(response.status, 200)
+        # A correctly signed Netlify token passes chat auth into existing validation.
+        response = await self.client.post("/api/chat", headers=self.headers(), json={})
+        self.assertEqual(response.status, 400)
+        for method, path in [("GET", "/api/voices"), ("GET", "/api/session/check"),
+                ("POST", "/api/speech"), ("POST", "/api/chat"),
+                ("POST", "/api/ui-tool-result"), ("POST", "/api/dialog-token"),
+                ("POST", "/api/live-token")]:
+            for token in ["", self.token[:-4] + "abcd"]:
+                denied = await self.client.request(method, path,
+                    headers={"Authorization": "Bearer " + token}, json={} if method == "POST" else None)
+                self.assertEqual(denied.status, 401, path)
 
     async def test_voice_catalogue_is_authenticated_and_selects_only_the_preferred_voice(self):
         denied = await self.client.get("/api/voices")

@@ -1,0 +1,91 @@
+[
+  {
+    "type": "function",
+    "name": "set_theme",
+    "description": "Set the chat theme to light, dark, or system.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "theme": {
+          "type": "string",
+          "enum": [
+            "system",
+            "light",
+            "dark"
+          ]
+        }
+      },
+      "required": [
+        "theme"
+      ]
+    }
+  },
+  {
+    "type": "function",
+    "name": "set_font_scale",
+    "description": "Set chat text size from 0.85 (smaller) to 1.3 (larger), where 1 is the default.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "scale": {
+          "type": "number",
+          "minimum": 0.85,
+          "maximum": 1.3
+        }
+      },
+      "required": [
+        "scale"
+      ]
+    }
+  },
+  {
+    "type": "function",
+    "name": "set_ui_color",
+    "description": "Change one named chat UI color. Convert the user's natural-language color request to a six-digit hex color. For a follow-up, adjust the previously changed target. Use readable text colors.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "target": {
+          "type": "string",
+          "enum": [
+            "pageBackground",
+            "headerBackground",
+            "messageBackground",
+            "userMessageBackground",
+            "composerBackground",
+            "primaryText",
+            "mutedText",
+            "accent",
+            "composerText"
+          ]
+        },
+        "color": {
+          "type": "string",
+          "pattern": "^#[0-9A-Fa-f]{6}$"
+        }
+      },
+      "required": [
+        "target",
+        "color"
+      ]
+    }
+  },
+  {
+    "type": "function",
+    "name": "get_ui_preferences",
+    "description": "Read the current theme, font size, and chat colors before making a requested appearance change.",
+    "parameters": {
+      "type": "object",
+      "properties": {}
+    }
+  },
+  {
+    "type": "function",
+    "name": "reset_ui",
+    "description": "Reset the theme, font size, and chat colors to their defaults.",
+    "parameters": {
+      "type": "object",
+      "properties": {}
+    }
+  }
+]

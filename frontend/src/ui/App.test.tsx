@@ -78,7 +78,7 @@ function mockApi(sessionCheck: () => Promise<Response> = async () => new Respons
   vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     if (url.endsWith('/api/voices')) return Promise.resolve(voiceCatalogue());
-    if (url.endsWith('/api/session') && (!init?.method || init.method === 'GET')) return sessionCheck();
+    if (url.endsWith('/api/session/check') || (url.endsWith('/api/session') && (!init?.method || init.method === 'GET'))) return sessionCheck();
     if (url.endsWith('/api/chat') || url.endsWith('/api/ui-tool-result')
       || (url.endsWith('/api/session') && init?.method === 'POST')) return responses(input, init);
     throw new Error(`Unexpected test request: ${init?.method || 'GET'} ${url}`);
@@ -111,13 +111,14 @@ describe('speech output lifecycle', () => {
     mockApi();
   });
 
-  it('recreates and warms the speech client after React Strict Mode cleanup', async () => {
+  it('recreates the speech client without waking Render after React Strict Mode cleanup', async () => {
     render(<StrictMode><App /></StrictMode>);
 
     await waitFor(() => expect(speechOutputMock.instances).toHaveLength(2));
     expect(speechOutputMock.instances[0].disposed).toBe(true);
     expect(speechOutputMock.instances[1].disposed).toBe(false);
-    expect(speechOutputMock.instances[1].warmups).toBe(1);
+    expect(speechOutputMock.instances[1].warmups).toBe(0);
+    expect(fetch).not.toHaveBeenCalled();
   });
 });
 
@@ -235,7 +236,7 @@ describe('chat cancellation and recovery', () => {
     render(<App />);
     const row = document.querySelector('.status-row')!;
     expect(row.children).toHaveLength(3);
-    expect(row.children[0]).toHaveTextContent('Checking Brian voice');
+    expect(row.children[0]).toHaveTextContent('Brian connects on playback');
     expect(row.children[2]).toHaveTextContent('Standard chat (no WebMCP)');
     await user.click(screen.getByRole('button', { name: 'Mic' }));
     expect(await screen.findByText('Gemini is listening')).toBeInTheDocument();
