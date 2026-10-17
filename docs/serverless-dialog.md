@@ -1,6 +1,6 @@
 # Dialog without Render cold starts
 
-Implemented and user-verified in production 2026-10-17. The user confirmed successful Netlify authentication/token requests and a complete Dialog conversation in a fresh private window with no Render requests. The Render-independent path is verified; numerical before/after timing remains unmeasured. Activation is explicit so deployments preserve existing login until Netlify secrets are ready. The After column below describes the activated migration.
+Implemented and user-verified in production 2026-10-17. The user confirmed successful Netlify authentication/token requests and a complete Dialog conversation in a fresh private window with no Render requests. The Render-independent path is verified; the user reports 30–50 seconds of wakeup before migration and under 4 seconds to readiness now (informal observation). Activation is explicit so deployments preserve existing login until Netlify secrets are ready. The After column below describes the activated migration.
 
 ## Audit and request paths
 
@@ -54,7 +54,7 @@ Platform counters cover separate function instances, but Netlify documents up to
 
 ## Verification and manual acceptance
 
-Production result (user-reported 2026-10-17): manual feature tests passed. Invitation, Dialog-token and Dictation-token requests used the expected Netlify URLs successfully. Fresh-private-window authentication and a complete Dialog conversation made no requests to Render. Deployed rate-limit enforcement, prolonged renewal and numerical latency were not separately reported; the checklist below remains available for repeat verification.
+Production result (user-reported 2026-10-17): manual feature tests passed. Invitation, Dialog-token and Dictation-token requests used the expected Netlify URLs successfully. Fresh-private-window authentication and a complete Dialog conversation made no requests to Render. The user reports 30–50 seconds of wakeup before migration and under 4 seconds to readiness now. Deployed rate-limit enforcement and prolonged renewal were not separately reported; the checklist below remains available for repeat verification.
 
 Automated coverage includes gate rejection, session expiration/tampering, origin/method/body bounds, invitation throttling, constrained token payloads, missing configuration, provider errors without secret echoes, Python session compatibility and authenticated Render endpoints. An App integration test uses the real Dialog, SpeechInput and SpeechOutput controllers with simulated audio/WebSocket responses, makes every Render request fail, and checks login, microphone packets, scheduled output audio, both transcripts, interruption, stop/restart and Dictation with **zero Render requests**. This does not verify real microphones or Google/Netlify services.
 
@@ -66,11 +66,36 @@ Owner verification after configuration/deployment (Browser Use is unavailable in
 4. Unblock Render. Send a typed question and check Antigravity streaming/cancellation/tools; Play an answer and check Brian plus browser fallback while Render wakes. Also verify Live's existing Antigravity/Brian turns.
 5. In a logged-out tab, token requests must return 401; wrong invitation codes must fail. Confirm deployed rate-limit rules in logs and check a bounded invalid-code burst. Do not share authorization headers or ephemeral tokens from DevTools.
 
-Timing record: the **before** cold-start delay is the user's reported 30–60 seconds, not a measurement from this task. A real **after** navigation-to-usable-Dialog measurement is pending; there is no honest numerical speedup to report yet. The automated blocked-Render test verifies removal of the dependency, not production latency. Repeat three cold visits before/after using the same browser/device and report the median, excluding time spent deciding what to type/say.
+Timing record (user-reported 2026-10-17): **before**, 30–50 seconds of Render wakeup; **after**, under 4 seconds to readiness. These are informal observations, not a controlled navigation-to-first-audio benchmark. Together with the verified zero-Render network trace, they establish the practical improvement; an instrumented benchmark is optional.
 
 Rollback: set `VITE_ACCESS_API_URL` to the existing Render URL and rebuild Netlify to use Python access/token endpoints again (restores the cold-start dependency). To restore automatic Brian warmup as well, revert the migration commit through a normal reviewed Git change; do not reset history. Existing Render sessions and provider configuration remain usable.
 
 ## Family scope and official references
+
+### Remaining backend inventory (analysis only, 2026-10-17)
+
+Netlify Functions are themselves a backend. IWD means the individual feature loses its Render wakeup dependency through the migration described below; it does not promise zero provider/function latency. No further migration is authorized or implemented by this inventory.
+
+| Feature/service | Current server-side work | Further Netlify migration | IWD |
+| --- | --- | --- | --- |
+| Invitation and session checks | Netlify verifies code and signed sessions | Already done | Yes |
+| Dialog | Netlify issues tokens; Google processes direct audio | Already done | Yes |
+| Dictation | Netlify issues tokens; Google transcribes direct audio | Already done | Yes |
+| Antigravity typed answers | Render authenticates, bounds requests, relays Google SSE and tracks conversation state | Port mediator to JS/TS; redesign long streams and state | Yes, if that path fully moves |
+| Antigravity appearance-tool continuation | Render validates pending calls/results and continues the Google interaction | Move with chat and preserve session/conversation binding | Yes, if that path fully moves |
+| Brian voice catalogue | Render calls Microsoft's catalogue via edge-tts and caches it | Port/cache catalogue independently | Yes for catalogue only; synthesis still waits for Render |
+| Brian audio synthesis and replay through Play | Render runs Python edge-tts, bounds text/audio, caches MP3 and limits concurrency | A Netlify wrapper calling Render is insufficient; actual synthesis needs a compatible implementation/runtime and testing | Conditional: no while synthesis stays on sleeping Render |
+| Complete Live conversation | Netlify/Google recognition plus Render Antigravity/Brian | Moving only Antigravity leaves Brian dependent on Render; both paths must move for full independence | Conditional: both answer and speech paths must be independent |
+| Usage counters, locks, pending tools and provider cursors | Render process memory, plus Netlify platform rules for access/token routes | Preserve validation and replace assumptions about one persistent process; strict shared counters/locks need suitable shared enforcement/storage | Supporting work; no standalone feature wakeup |
+| Render health check | Public diagnostic endpoint, not on Dialog startup path | Can retire with Render or replace as diagnostics require | No user-facing wakeup benefit |
+
+Antigravity already runs at Google; only Talker's mediator would move. Existing chat/tool requests allow 180 seconds, whereas Netlify documents 60 seconds for synchronous functions. Streaming duration, cancellation and resumption need a reviewed design and real-provider verification, not a simple URL change. Provider-side background execution exists but adopting it would change the current request flow. Conversation IDs, pending calls, quotas and locks cannot safely rely on shared warm function memory.
+
+Brian is a voice selection within the Python edge-tts path, not a separately movable service. Netlify's documented native function paths are JS/TS and Go; moving this Python implementation unchanged is not the supported route. A compatible port or a separately supported Python hosting solution could remove Render, but voice identity, protocol reliability and latency remain unverified. Keep browser voice fallback and Gemini Dialog native voice distinct from Brian.
+
+Manual appearance controls, WebMCP registration/action execution, visible history and audio playback/capture run in the browser and need no Talker backend by themselves. AI interpretation still needs its selected provider; Play currently requests Brian synthesis even for Dialog answers. Render has no other indispensable always-on role beyond the mediator, synthesis and their supporting safeguards/state. Future migration feasibility is analysis, not authorization to change providers, infrastructure or billing.
+
+References for this inventory: [Netlify native function languages](https://docs.netlify.com/build/functions/get-started/), [execution limits](https://docs.netlify.com/build/functions/configuration/), [ephemeral function runtime](https://docs.netlify.com/build/functions/overview/), [edge-tts Python implementation](https://github.com/rany2/edge-tts), [Antigravity background execution](https://ai.google.dev/gemini-api/docs/antigravity-agent).
 
 This is Talker's deployment-specific migration. Vanilla is untouched and has no separate hosted deployment. The small App routing/lazy-warmup edits and Python alias are a documented descendant core exception: future Vanilla adoption may conflict around App initialization and the route list; preserve these deployment choices during the reviewed merge. Netlify tools duplicate the existing Python declarations with an automated parity check, rather than introducing shared packages or changing repository topology.
 
