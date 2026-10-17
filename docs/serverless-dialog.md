@@ -1,6 +1,6 @@
 # Dialog without Render cold starts
 
-Implemented 2026-10-17. Activation is explicit so an automatic code deploy preserves existing login until Netlify secrets are ready. Production acceptance remains pending configuration and a real microphone check. The After column below describes the activated migration.
+Implemented and user-verified in production 2026-10-17. The user confirmed successful Netlify authentication/token requests and a complete Dialog conversation in a fresh private window with no Render requests. The Render-independent path is verified; numerical before/after timing remains unmeasured. Activation is explicit so deployments preserve existing login until Netlify secrets are ready. The After column below describes the activated migration.
 
 ## Audit and request paths
 
@@ -53,6 +53,8 @@ Netlify Free supports two rules; this change uses exactly two:
 Platform counters cover separate function instances, but Netlify documents up to ten seconds of enforcement lag. These are abuse controls, **not strict durable global quotas**. The original 600-second invitation counter still resets per instance; Render chat/daily/speech counters remain process-local. Google enforces its project quotas; keep its billing disabled. No existing durable quota was removed.
 
 ## Verification and manual acceptance
+
+Production result (user-reported 2026-10-17): manual feature tests passed. Invitation, Dialog-token and Dictation-token requests used the expected Netlify URLs successfully. Fresh-private-window authentication and a complete Dialog conversation made no requests to Render. Deployed rate-limit enforcement, prolonged renewal and numerical latency were not separately reported; the checklist below remains available for repeat verification.
 
 Automated coverage includes gate rejection, session expiration/tampering, origin/method/body bounds, invitation throttling, constrained token payloads, missing configuration, provider errors without secret echoes, Python session compatibility and authenticated Render endpoints. An App integration test uses the real Dialog, SpeechInput and SpeechOutput controllers with simulated audio/WebSocket responses, makes every Render request fail, and checks login, microphone packets, scheduled output audio, both transcripts, interruption, stop/restart and Dictation with **zero Render requests**. This does not verify real microphones or Google/Netlify services.
 
