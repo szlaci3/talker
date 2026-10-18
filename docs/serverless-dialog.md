@@ -18,7 +18,7 @@ Implemented and user-verified in production 2026-10-17. The user confirmed succe
 
 Authentication and token issuance have no fetch, health check, or proxy to Render. The Gemini model, Aoede voice, microphone transport, audio playback, transcripts, appearance tools, interruptions and reconnection logic are preserved. Dialog answer **Play** still synthesizes Brian/browser speech and can wake Render; original Gemini recording replay remains deferred.
 
-Morning-startup fix (2026-10-18): a stale signed session's expiry is checked locally on load, tab resume and Send. This is only an early UX check; the server still verifies its signature. Send awaits the same in-flight access check as composer focus, shows “Checking session…” before adding any Thinking turn, and retains the draft if authentication or validation fails. Access checks time out after eight seconds; unavailable validation never falls through to Render. A valid typed-chat request can still wait for Render until Antigravity is activated. Local Python-only routing remains supported.
+Morning-startup fix (2026-10-18): a stale signed session's expiry is checked locally on load, tab resume and Send. This is only an early UX check; the server still verifies its signature. Send awaits the same in-flight access check as composer focus, shows “Checking session…” before adding any Thinking turn, and retains the draft if authentication or validation fails. Access checks time out after eight seconds; unavailable validation never falls through to Render. Valid typed chat with legacy routing could still wait for Render; the user subsequently confirmed Antigravity activation on Netlify and passing manual tests the same day. Local Python-only routing remains supported.
 
 ## Deployment configuration
 
@@ -58,6 +58,8 @@ Platform counters cover separate function instances, but Netlify documents up to
 ## Verification and manual acceptance
 
 Production result (user-reported 2026-10-17): manual feature tests passed. Invitation, Dialog-token and Dictation-token requests used the expected Netlify URLs successfully. Fresh-private-window authentication and a complete Dialog conversation made no requests to Render. The user reports 30–50 seconds of wakeup before migration and under 4 seconds to readiness now. Deployed rate-limit enforcement and prolonged renewal were not separately reported; the checklist below remains available for repeat verification.
+
+Update (2026-10-18): the user elected to skip deployed rate-limit verification; controls remain in place and enforcement is unverified by choice. Prolonged voice-session renewal is the user's next manual check. Antigravity is now activated on Netlify with manual tests reported passing; references below to Render chat describe the original migration/rollback path.
 
 Automated coverage includes gate rejection, session expiration/tampering, origin/method/body bounds, invitation throttling, constrained token payloads, missing configuration, provider errors without secret echoes, Python session compatibility and authenticated Render endpoints. An App integration test uses the real Dialog, SpeechInput and SpeechOutput controllers with simulated audio/WebSocket responses, makes every Render request fail, and checks login, microphone packets, scheduled output audio, both transcripts, interruption, stop/restart and Dictation with **zero Render requests**. This does not verify real microphones or Google/Netlify services.
 

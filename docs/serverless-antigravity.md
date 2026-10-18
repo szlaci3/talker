@@ -1,8 +1,6 @@
 # Antigravity on Netlify
 
-Implemented 2026-10-17. Activation and hosted verification remain owner steps. Dialog's existing migration stays independent; Brian remains on Render.
-
-The user confirmed on 2026-10-18 that Antigravity has not been activated; deployed typed chat still uses Render.
+Implemented 2026-10-17. Activated on Netlify and manual tests passed, confirmed by the user on 2026-10-18. This supersedes the earlier same-day report that activation was pending. Dialog's existing migration stays independent; Brian remains on Render. Individual manual scenarios and Render legacy-chat retirement were not separately confirmed. The user elected to skip deployed rate-limit verification; existing safeguards remain in place.
 
 ## Activation
 
@@ -36,6 +34,8 @@ The existing 30-per-180-second IP/domain platform rule also covers the new publi
 Transient job buffers expire logically after 15 minutes (or the session margin, if sooner); queued prompt/history payloads are removed when claimed. Conversation pointers and usage expire with the eight-hour session plus a ten-minute in-flight margin. Daily counter keys expire after eight days. Hourly cleanup removes up to 500 expired entries per run; physical deletion can lag eligibility and backlog. There is no user-visible persisted chat history; a page reload still starts a new conversation. Google retains its own managed-agent interaction state as before.
 
 ## Verification
+
+Production (user-reported 2026-10-18): Antigravity activated on Netlify; manual tests passed. Deployed rate-limit enforcement is unverified by choice, rather than a remaining required manual check. The checklist below is retained for reference; no specific network trace, cancellation scenario or legacy-route retirement is inferred from the general passing report.
 
 Passed locally:
 
