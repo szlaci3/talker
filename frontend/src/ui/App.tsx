@@ -766,7 +766,7 @@ export default function App() {
             : speech.service === 'connecting' ? 'Brian voice is connecting.'
               : speech.service === 'unavailable'
                 ? <><span title={speech.detail}>Brian voice unavailable.</span> <button type="button" onClick={() => void speechOutput.current?.reconnect()}>Reconnect</button></>
-                : 'Brian connects on playback.'}
+                : 'Brian voice connects on playback.'}
         </div>
         <div className={'status-item dictation-status' + (listenerStatus ? ' is-active' : '')} role="status">{listenerStatus}</div>
         <div className="status-item webmcp-status" role="status" aria-label={webmcp}>
