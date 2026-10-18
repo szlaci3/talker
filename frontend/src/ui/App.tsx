@@ -25,6 +25,14 @@ const LIVE_SILENCE_MS = 4000;
 const suggestions = ['What can you help me with?', 'Explain a tricky idea simply', 'Help me plan a small project'];
 const WEBMCP_FALLBACK = 'Standard chat (no WebMCP)';
 
+// An early UX check only; the access server still verifies the signature.
+function sessionExpired(token: string): boolean {
+  try {
+    const expiry = atob(token.replace(/-/g, '+').replace(/_/g, '/')).split('.')[0];
+    return /^\d{10}$/.test(expiry) && Number(expiry) <= Math.floor(Date.now() / 1000);
+  } catch { return false; }
+}
+
 function preferences(theme: string, scale: number): { theme: string; fontScale: number; colors: ColorPreferences } {
   const root = document.documentElement;
   const colors = Object.fromEntries(Object.entries(COLOR_CSS_VARIABLES).map(([target, variable]) => {
@@ -98,6 +106,8 @@ export default function App() {
   const [liveCountdown, setLiveCountdown] = useState<number | null>(null);
   const [correction, setCorrection] = useState<TranscriptCorrection | null>(null);
   const [busy, setBusy] = useState(false);
+  const [checkingSession, setCheckingSession] = useState(false);
+  const sendPending = useRef(false);
   const [error, setError] = useState('');
   const [webmcp, setWebmcp] = useState('Checking WebMCP…');
   const [theme, setTheme] = useState<Theme>(initialTheme);
@@ -120,7 +130,7 @@ export default function App() {
   const dictationBase = useRef('');
   const correctionTimer = useRef<number | undefined>(undefined);
   const abort = useRef<AbortController | null>(null);
-  const sessionCheck = useRef<Promise<void> | null>(null);
+  const sessionCheck = useRef<{ token: string; promise: Promise<boolean> } | null>(null);
   const tail = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -143,6 +153,17 @@ export default function App() {
       setDictationActive(false);
       setDictationStatus('');
     }
+  }, [token]);
+  useEffect(() => {
+    const resume = () => { if (!document.hidden) void checkSession(); };
+    // A known expired token needs no network request, including on a fresh load.
+    if (token && sessionExpired(token)) void checkSession();
+    window.addEventListener('focus', resume);
+    document.addEventListener('visibilitychange', resume);
+    return () => {
+      window.removeEventListener('focus', resume);
+      document.removeEventListener('visibilitychange', resume);
+    };
   }, [token]);
   useEffect(() => () => {
     dialog.current?.stop();
@@ -340,32 +361,51 @@ export default function App() {
   }
 
   async function checkSession() {
-    if (!token || sessionCheck.current) return sessionCheck.current;
+    if (!token) return false;
     const checkedToken = token;
+    const expire = () => {
+      if (sessionStorage.getItem('chat-token') !== checkedToken) return;
+      sessionStorage.removeItem('chat-token');
+      setToken('');
+      setError('Your session expired. Enter the code again to continue.');
+    };
+    if (sessionExpired(checkedToken)) { expire(); return false; }
+    if (sessionCheck.current?.token === checkedToken) return sessionCheck.current.promise;
     const check = (async () => {
+      const controller = new AbortController();
+      const timeout = window.setTimeout(() => controller.abort(), 8000);
       try {
         const r = await fetch(ACCESS_API + SESSION_CHECK_PATH, {
           headers: { 'Authorization': 'Bearer ' + checkedToken },
+          signal: controller.signal,
         });
-        if (r.status === 401 && sessionStorage.getItem('chat-token') === checkedToken) {
-          sessionStorage.removeItem('chat-token');
-          setToken('');
-          setError('Your session expired. Enter the code again to continue.');
-        }
+        if (r.status === 401) expire();
+        return r.ok && sessionStorage.getItem('chat-token') === checkedToken;
       } catch {
-        // Keep the chat usable during a temporary connection failure.
-      }
+        return false;
+      } finally { window.clearTimeout(timeout); }
     })();
-    sessionCheck.current = check;
-    try { await check; } finally { if (sessionCheck.current === check) sessionCheck.current = null; }
+    sessionCheck.current = { token: checkedToken, promise: check };
+    try { return await check; } finally { if (sessionCheck.current?.promise === check) sessionCheck.current = null; }
   }
 
   async function send(e?: FormEvent, text = input) {
     e?.preventDefault();
     const body = text.trim();
-    if (!body || abort.current || !token) return;
+    if (!body || abort.current || sendPending.current || !token) return;
     stopDialog();
-
+    sendPending.current = true;
+    setCheckingSession(true);
+    const valid = await checkSession();
+    sendPending.current = false;
+    setCheckingSession(false);
+    if (!valid) {
+      if (sessionStorage.getItem('chat-token') === token) {
+        setError('Could not verify your session. Your question is kept; try sending again.');
+      }
+      return;
+    }
+    if (abort.current) return;
     const keepLiveOpen = liveActiveRef.current;
     if (keepLiveOpen) {
       clearLiveSilenceTimer();
@@ -775,6 +815,7 @@ export default function App() {
         </div>
       </div>
       {error && <p className="error">{error}</p>}
+      {checkingSession && <p role="status">Checking session…</p>}
       <form className="composer" onSubmit={send}>
         <div className="composer-field" ref={composerField}>
           <div className="composer-preview" aria-hidden="true"><div className="composer-preview-content" ref={composerPreview}>{draftPreview(input, correction, dictationBase.current.length)}</div></div>
@@ -794,7 +835,7 @@ export default function App() {
           {dialogActive ? 'End Dialog' : 'Dialog'}
         </button>
         {(busy || answerSpeaking) && <button type="button" className="interrupt" onClick={interruptResponse}>Interrupt</button>}
-        <button type="submit" aria-label={liveActive && input.trim() ? 'Send now' : '↑'} className={liveActive && input.trim() ? 'send-now' : ''} disabled={!input.trim() || busy}>{liveActive && input.trim() ? 'Send now' : '↑'}</button>
+        <button type="submit" aria-label={liveActive && input.trim() ? 'Send now' : '↑'} className={liveActive && input.trim() ? 'send-now' : ''} disabled={!input.trim() || busy || checkingSession}>{liveActive && input.trim() ? 'Send now' : '↑'}</button>
       </form>
       <p className="footnote">Enter to send · Shift + Enter for a new line</p>
     </footer>

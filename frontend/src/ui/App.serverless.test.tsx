@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, expect, it, vi } from 'vitest';
 import App from './App';
@@ -54,6 +54,108 @@ class Audio {
     return source;
   }
 }
+
+function sessionAt(expiry: number) {
+  return btoa(`${expiry}.test-signature`).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+it('opens the gate immediately for an expired stored session without waking Render', async () => {
+  sessionStorage.setItem('chat-token', sessionAt(Math.floor(Date.now() / 1000) - 1));
+  vi.stubGlobal('fetch', vi.fn(() => { throw new Error('No network expected'); }));
+  render(<App />);
+  expect(await screen.findByRole('textbox', { name: 'Invitation code' })).toBeInTheDocument();
+  expect(sessionStorage.getItem('chat-token')).toBeNull();
+  expect(fetch).not.toHaveBeenCalled();
+});
+
+it('detects overnight expiry when the tab becomes visible and preserves the draft', async () => {
+  const now = Date.now();
+  const clock = vi.spyOn(Date, 'now').mockReturnValue(now);
+  sessionStorage.setItem('chat-token', sessionAt(Math.floor(now / 1000) + 60));
+  vi.stubGlobal('fetch', vi.fn(async () => Response.json({ token: 'renewed-session' })));
+  const user = userEvent.setup();
+  render(<App />);
+  fireEvent.change(screen.getByRole('textbox', { name: 'Message' }), { target: { value: 'Morning question' } });
+  clock.mockReturnValue(now + 61_000);
+  fireEvent(document, new Event('visibilitychange'));
+  expect(await screen.findByRole('textbox', { name: 'Invitation code' })).toBeInTheDocument();
+  expect(fetch).not.toHaveBeenCalled();
+  await user.type(screen.getByRole('textbox', { name: 'Invitation code' }), 'valid-invitation');
+  await user.click(screen.getByRole('button', { name: /Continue/ }));
+  expect(await screen.findByRole('textbox', { name: 'Message' })).toHaveValue('Morning question');
+  expect(vi.mocked(fetch).mock.calls.map(([url]) => url)).toEqual(['/api/session']);
+});
+
+it('checks expiry again on Send even when the composer stayed focused overnight', async () => {
+  const now = Date.now();
+  const clock = vi.spyOn(Date, 'now').mockReturnValue(now);
+  sessionStorage.setItem('chat-token', sessionAt(Math.floor(now / 1000) + 60));
+  vi.stubGlobal('fetch', vi.fn(() => { throw new Error('No network expected'); }));
+  render(<App />);
+  const composer = screen.getByRole('textbox', { name: 'Message' });
+  fireEvent.change(composer, { target: { value: 'Morning question' } });
+  clock.mockReturnValue(now + 61_000);
+  fireEvent.keyDown(composer, { key: 'Enter' });
+  expect(await screen.findByRole('textbox', { name: 'Invitation code' })).toBeInTheDocument();
+  expect(fetch).not.toHaveBeenCalled();
+  expect(screen.queryByText(/Thinking/)).not.toBeInTheDocument();
+});
+
+it('awaits the in-flight Netlify focus check before Send and never contacts sleeping Render for an invalid session', async () => {
+  sessionStorage.setItem('chat-token', 'stored-session');
+  let finish!: (response: Response) => void;
+  const pending = new Promise<Response>(resolve => { finish = resolve; });
+  vi.stubGlobal('fetch', vi.fn((url: RequestInfo | URL) => {
+    if (url === '/api/session/check') return pending;
+    throw new Error('Render must not be contacted');
+  }));
+  render(<App />);
+  const composer = screen.getByRole('textbox', { name: 'Message' });
+  fireEvent.focus(composer);
+  fireEvent.change(composer, { target: { value: 'Morning question' } });
+  fireEvent.keyDown(composer, { key: 'Enter' });
+  fireEvent.keyDown(composer, { key: 'Enter' });
+  expect(screen.getByText('Checking session…')).toBeInTheDocument();
+  expect(screen.queryByText(/Thinking/)).not.toBeInTheDocument();
+  expect(fetch).toHaveBeenCalledTimes(1);
+  await act(async () => finish(Response.json({}, { status: 401 })));
+  expect(await screen.findByRole('textbox', { name: 'Invitation code' })).toBeInTheDocument();
+  expect(fetch).toHaveBeenCalledTimes(1);
+});
+
+it('keeps the question without calling Render when Netlify session validation fails', async () => {
+  sessionStorage.setItem('chat-token', 'stored-session');
+  vi.stubGlobal('fetch', vi.fn(async (url: RequestInfo | URL) => {
+    if (url === '/api/session/check') return Response.json({}, { status: 503 });
+    throw new Error('Render must not be contacted');
+  }));
+  render(<App />);
+  const composer = screen.getByRole('textbox', { name: 'Message' });
+  fireEvent.change(composer, { target: { value: 'Morning question' } });
+  fireEvent.keyDown(composer, { key: 'Enter' });
+  expect(await screen.findByText('Could not verify your session. Your question is kept; try sending again.')).toBeInTheDocument();
+  expect(composer).toHaveValue('Morning question');
+  expect(vi.mocked(fetch).mock.calls.map(([url]) => url)).toEqual(['/api/session/check']);
+});
+
+it('bounds a stalled session check and keeps the question available for retry', async () => {
+  vi.useFakeTimers();
+  try {
+    sessionStorage.setItem('chat-token', 'stored-session');
+    vi.stubGlobal('fetch', vi.fn((_url: RequestInfo | URL, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener('abort', () => reject(new DOMException('Timed out', 'AbortError')), { once: true });
+    })));
+    render(<App />);
+    const composer = screen.getByRole('textbox', { name: 'Message' });
+    fireEvent.change(composer, { target: { value: 'Morning question' } });
+    fireEvent.keyDown(composer, { key: 'Enter' });
+    await act(async () => { await vi.advanceTimersByTimeAsync(8000); });
+    expect(screen.getByText('Could not verify your session. Your question is kept; try sending again.')).toBeInTheDocument();
+    expect(composer).toHaveValue('Morning question');
+    expect(screen.getByRole('button', { name: '↑' })).toBeEnabled();
+    expect(fetch).toHaveBeenCalledTimes(1);
+  } finally { vi.useRealTimers(); }
+});
 
 it('authenticates, runs Dialog and Dictation, and restarts with Render unreachable', async () => {
   Audio.instances = [];

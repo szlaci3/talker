@@ -236,7 +236,7 @@ describe('chat cancellation and recovery', () => {
     render(<App />);
     const row = document.querySelector('.status-row')!;
     expect(row.children).toHaveLength(3);
-    expect(row.children[0]).toHaveTextContent('Brian connects on playback');
+    expect(row.children[0]).toHaveTextContent('Brian voice connects on playback');
     expect(row.children[2]).toHaveTextContent('Standard chat (no WebMCP)');
     await user.click(screen.getByRole('button', { name: 'Mic' }));
     expect(await screen.findByText('Gemini is listening')).toBeInTheDocument();

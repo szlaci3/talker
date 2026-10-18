@@ -10,12 +10,15 @@ Implemented and user-verified in production 2026-10-17. The user confirmed succe
 | Initial page with stored session / successful login | Render `/api/voices` warmup, with retries | No automatic Render request |
 | Invitation submission | Render `POST /api/session` | Netlify `POST /api/session` |
 | Composer focus | Render `GET /api/session` | Netlify `GET /api/session/check` |
+| Send / tab resume | Send could race the focus check and wait for Render to reject expiry | Known expiry opens the gate locally; Send awaits Netlify validation before chat |
 | Dialog start / renewal | Render `POST /api/dialog-token`, then direct Google WebSocket | Netlify token route, same direct Google WebSocket |
 | Dictation / Live recognition start / renewal | Render `POST /api/live-token`, then direct Google WebSocket | Netlify token route, same direct Google WebSocket |
 | Typed chat / Live answers and appearance continuations | Render `/api/chat`, `/api/ui-tool-result` | Unchanged; requested only on use |
 | Play / Live answer speech / explicit Reconnect | Render `/api/voices`, `/api/speech` | Unchanged; Brian warmup begins on playback or explicit Reconnect |
 
 Authentication and token issuance have no fetch, health check, or proxy to Render. The Gemini model, Aoede voice, microphone transport, audio playback, transcripts, appearance tools, interruptions and reconnection logic are preserved. Dialog answer **Play** still synthesizes Brian/browser speech and can wake Render; original Gemini recording replay remains deferred.
+
+Morning-startup fix (2026-10-18): a stale signed session's expiry is checked locally on load, tab resume and Send. This is only an early UX check; the server still verifies its signature. Send awaits the same in-flight access check as composer focus, shows “Checking session…” before adding any Thinking turn, and retains the draft if authentication or validation fails. Access checks time out after eight seconds; unavailable validation never falls through to Render. A valid typed-chat request can still wait for Render until Antigravity is activated. Local Python-only routing remains supported.
 
 ## Deployment configuration
 
@@ -66,7 +69,7 @@ Owner verification after configuration/deployment (Browser Use is unavailable in
 4. Unblock Render. Send a typed question and check Antigravity streaming/cancellation/tools; Play an answer and check Brian plus browser fallback while Render wakes. Also verify Live's existing Antigravity/Brian turns.
 5. In a logged-out tab, token requests must return 401; wrong invitation codes must fail. Confirm deployed rate-limit rules in logs and check a bounded invalid-code burst. Do not share authorization headers or ephemeral tokens from DevTools.
 
-Timing record (user-reported 2026-10-17): **before**, 30–50 seconds of Render wakeup; **after**, under 4 seconds to readiness. These are informal observations, not a controlled navigation-to-first-audio benchmark. Together with the verified zero-Render network trace, they establish the practical improvement; an instrumented benchmark is optional.
+Timing record (user-reported 2026-10-17): **before**, 30–50 seconds of Render wakeup; **after**, under 4 seconds to readiness. These are informal observations, not a controlled navigation-to-first-audio benchmark. Together with the verified zero-Render network trace, they establish the practical improvement. The user confirmed on 2026-10-18 that informal timing is sufficient; no instrumented benchmark is required.
 
 Rollback: set `VITE_ACCESS_API_URL` to the existing Render URL and rebuild Netlify to use Python access/token endpoints again (restores the cold-start dependency). To restore automatic Brian warmup as well, revert the migration commit through a normal reviewed Git change; do not reset history. Existing Render sessions and provider configuration remain usable.
 
@@ -98,5 +101,7 @@ Manual appearance controls, WebMCP registration/action execution, visible histor
 References for this inventory: [Netlify native function languages](https://docs.netlify.com/build/functions/get-started/), [execution limits](https://docs.netlify.com/build/functions/configuration/), [ephemeral function runtime](https://docs.netlify.com/build/functions/overview/), [edge-tts Python implementation](https://github.com/rany2/edge-tts), [Antigravity background execution](https://ai.google.dev/gemini-api/docs/antigravity-agent).
 
 This is Talker's deployment-specific migration. Vanilla is untouched and has no separate hosted deployment. The small App routing/lazy-warmup edits and Python alias are a documented descendant core exception: future Vanilla adoption may conflict around App initialization and the route list; preserve these deployment choices during the reviewed merge. Netlify tools duplicate the existing Python declarations with an automated parity check, rather than introducing shared packages or changing repository topology.
+
+The 2026-10-18 session/Send fix extends this descendant exception to `App.tsx` session validation and tab-resume handlers; review those blocks during future Vanilla adoption. It repairs the existing Talker access/chat split without cross-repository promotion or a Vanilla release.
 
 Rechecked 2026-10-17: [Netlify Functions configuration](https://docs.netlify.com/build/functions/configuration/), [rate limiting and Free-plan rule limits](https://docs.netlify.com/manage/security/secure-access-to-sites/rate-limiting/), [function environment variables](https://docs.netlify.com/build/functions/environment-variables/), [Free plan credit limits](https://docs.netlify.com/manage/accounts-and-billing/billing/billing-for-credit-based-plans/credit-based-pricing-plans/), [Google ephemeral tokens](https://ai.google.dev/gemini-api/docs/live-api/ephemeral-tokens), [Google v1beta discovery wire schema](https://generativelanguage.googleapis.com/$discovery/rest?version=v1beta), [Google model deprecations](https://ai.google.dev/gemini-api/docs/deprecations/). The guide's SDK `liveConnectConstraints` shape differs from the discovery REST schema; retain the existing verified REST fields. Do not change the working preview model as part of this migration. Google currently lists its shutdown on November 17, 2026; replacement remains a separate decision.

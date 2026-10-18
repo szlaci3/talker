@@ -2,6 +2,8 @@
 
 Implemented 2026-10-17. Activation and hosted verification remain owner steps. Dialog's existing migration stays independent; Brian remains on Render.
 
+The user confirmed on 2026-10-18 that Antigravity has not been activated; deployed typed chat still uses Render.
+
 ## Activation
 
 1. Deploy this revision. Verify Netlify lists `live-access`, `antigravity-worker` (**background**) and `chat-cleanup` (**hourly scheduled**), alongside `session`. The existing two rate-limit rules must remain valid in post-processing logs.
